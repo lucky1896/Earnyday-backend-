@@ -17,6 +17,7 @@ const nodemailer = require('nodemailer');
 const app = express();
 app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
 // ---------- DATABASE ----------
 const db = new Database('earnyday.db');
@@ -322,3 +323,4 @@ app.post('/api/admin/config', requireAdmin, (req, res) => {
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Earny Day API running on port ${PORT}`));
+  

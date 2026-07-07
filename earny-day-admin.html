@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earny Day — Admin Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f7f8fa; --surface:#ffffff; --surface-alt:#f1f3f6; --line:#e3e6ec;
+    --primary:#0f6b5c; --indigo:#4c4fe0; --accent:#a8751f; --red:#c4432f;
+    --text:#101828; --text-dim:#667085; --radius:12px; --shadow:0 1px 2px rgba(16,24,40,0.06);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; line-height:1.5; }
+  h1,h2,h3{ font-family:'Inter',sans-serif; font-weight:700; letter-spacing:-0.01em; }
+  .mono{ font-family:'JetBrains Mono',monospace; }
+  .wrap{ max-width:1100px; margin:0 auto; padding:0 24px 60px; }
+
+  #gate{ min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px; }
+  .gate-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:30px; width:100%; max-width:360px; }
+  .gate-card h1{ font-size:1.3rem; margin-bottom:6px; }
+  .gate-card p{ color:var(--text-dim); font-size:0.86rem; margin-bottom:18px; }
+  .gate-card input{ width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface-alt); margin-bottom:10px; font-size:0.9rem; }
+  .gate-error{ color:var(--red); font-size:0.82rem; margin-bottom:8px; min-height:1em; }
+
+  #adminApp{ display:none; }
+  header.topbar{ border-bottom:1px solid var(--line); background:var(--surface); }
+  .topbar-inner{ max-width:1100px; margin:0 auto; padding:18px 24px; display:flex; align-items:center; justify-content:space-between; }
+  .logo{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.1rem; }
+  .logo-mark{ width:26px; height:26px; border-radius:7px; background:var(--indigo); }
+  .badge{ background:rgba(76,79,224,0.10); color:var(--indigo); border:1px solid rgba(76,79,224,0.35); padding:5px 12px; border-radius:999px; font-size:0.72rem; font-weight:700; text-transform:uppercase; letter-spacing:0.05em; }
+
+  .page-head{ padding:32px 0 24px; }
+  .page-head h1{ font-size:1.6rem; }
+  .page-head p{ color:var(--text-dim); font-size:0.92rem; margin-top:6px; }
+
+  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(180px,1fr)); gap:14px; margin-bottom:32px; }
+  .stat{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); }
+  .stat .num{ font-size:1.6rem; font-weight:700; }
+  .stat .lab{ color:var(--text-dim); font-size:0.8rem; margin-top:4px; }
+  .stat.rev .num{ color:var(--indigo); }
+  .stat.payout .num{ color:var(--accent); }
+
+  section{ margin-bottom:36px; }
+  .section-head{ display:flex; align-items:baseline; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:10px; }
+  .section-head h2{ font-size:1.15rem; }
+  .section-head .tag{ color:var(--text-dim); font-size:0.85rem; }
+  .card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:20px; box-shadow:var(--shadow); }
+
+  table{ width:100%; border-collapse:collapse; font-size:0.88rem; }
+  th{ text-align:left; color:var(--text-dim); font-weight:600; font-size:0.74rem; text-transform:uppercase; letter-spacing:0.05em; padding:9px 10px; border-bottom:1px solid var(--line); }
+  td{ padding:11px 10px; border-bottom:1px solid var(--line); }
+  tr:last-child td{ border-bottom:none; }
+  .pos{ color:var(--primary); }
+  .status-pill{ padding:3px 10px; border-radius:999px; font-size:0.72rem; font-weight:600; }
+  .status-pill.pending{ background:rgba(168,117,31,0.12); color:var(--accent); }
+  .status-pill.paid{ background:rgba(15,107,92,0.10); color:var(--primary); }
+
+  .config-row{ display:flex; align-items:center; justify-content:space-between; padding:14px 0; border-bottom:1px solid var(--line); gap:16px; flex-wrap:wrap; }
+  .config-row:last-child{ border-bottom:none; }
+  .config-row .label{ font-weight:600; font-size:0.92rem; }
+  .config-row .desc{ color:var(--text-dim); font-size:0.8rem; margin-top:2px; }
+  input[type=number]{ background:var(--surface-alt); border:1px solid var(--line); color:var(--text); padding:8px 12px; border-radius:8px; width:90px; font-family:'JetBrains Mono',monospace; font-size:0.9rem; }
+  button{ font-family:'Inter',sans-serif; font-weight:600; cursor:pointer; border:none; border-radius:999px; padding:9px 18px; font-size:0.82rem; background:var(--indigo); color:#ffffff; }
+  button:hover{ opacity:0.9; }
+  button.ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
+  .note{ background:var(--surface-alt); border:1px solid var(--line); border-left:3px solid var(--red); padding:14px 18px; border-radius:8px; color:var(--text-dim); font-size:0.85rem; }
+</style>
+</head>
+<body>
+
+<!-- ============ ADMIN KEY GATE ============ -->
+<div id="gate">
+  <div class="gate-card">
+    <div class="logo" style="margin-bottom:16px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1>Admin Access</h1>
+    <p>Enter your backend URL and admin key (set in the backend's .env file).</p>
+    <div class="gate-error" id="gateError"></div>
+    <input type="text" id="apiBaseInput" value="https://earnyday-backend.onrender.com/api" placeholder="Backend API URL">
+    <input type="password" id="adminKeyInput" placeholder="Admin key">
+    <button style="width:100%;" id="gateBtn">Enter Dashboard</button>
+  </div>
+</div>
+
+<!-- ============ ADMIN APP ============ -->
+<div id="adminApp">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="logo"><span class="logo-mark"></span> Earny Day</div>
+      <span class="badge">Admin Only</span>
+    </div>
+  </header>
+
+  <div class="wrap">
+    <div class="page-head">
+      <h1>Owner Dashboard</h1>
+      <p>Platform revenue, payouts, and ad network settings. Keep this page's URL and admin key private.</p>
+    </div>
+
+    <div class="stat-grid">
+      <div class="stat rev"><div class="num mono" id="platformRevenue">₹0.00</div><div class="lab">Your revenue (estimated)</div></div>
+      <div class="stat payout"><div class="num mono" id="userPayout">₹0.00</div><div class="lab">Earned by users (all time)</div></div>
+      <div class="stat"><div class="num mono" id="totalAds">0</div><div class="lab">Ads served (all time)</div></div>
+      <div class="stat"><div class="num mono" id="totalUsers">0</div><div class="lab">Registered users</div></div>
+    </div>
+
+    <section>
+      <div class="section-head"><h2>Revenue split configuration</h2><span class="tag">Controls what every user sees on their app</span></div>
+      <div class="card">
+        <div class="config-row">
+          <div><div class="label">User share per ad</div><div class="desc">Percentage of ad revenue passed on to the user as coins</div></div>
+          <div style="display:flex; align-items:center; gap:8px;"><input type="number" id="userShareInput" min="0" max="100">%</div>
+        </div>
+        <div class="config-row">
+          <div><div class="label">Coin to ₹ conversion rate</div><div class="desc">How many coins equal ₹1</div></div>
+          <div style="display:flex; align-items:center; gap:8px;">100 coins = ₹<input type="number" id="rateInput" min="0.1" step="0.1"></div>
+        </div>
+        <div class="config-row">
+          <div><div class="label">Minimum withdrawal</div><div class="desc">Smallest amount a user can request as payout</div></div>
+          <div style="display:flex; align-items:center; gap:8px;">₹<input type="number" id="minWithdrawInput" min="1"></div>
+        </div>
+        <div class="config-row">
+          <div><div class="label">Daily free ad limit</div><div class="desc">Max ads per day for non-Premium users</div></div>
+          <div style="display:flex; align-items:center; gap:8px;"><input type="number" id="dailyLimitInput" min="1"></div>
+        </div>
+        <div style="margin-top:16px; display:flex; gap:10px;">
+          <button id="saveConfigBtn">Save Settings</button>
+        </div>
+      </div>
+      <div class="note" style="margin-top:14px;">Changing the user share affects real payout costs — model this against your ad network's actual CPM before going live.</div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Withdrawal requests</h2><span class="tag">Mark as paid once you've sent the money manually via UPI/bank transfer</span></div>
+      <div class="card" style="padding:0;">
+        <table>
+          <thead><tr><th>User</th><th>Amount</th><th>Requested</th><th>Status</th><th></th></tr></thead>
+          <tbody id="withdrawTable"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head"><h2>Ad network connection</h2><span class="tag">Where the actual ads and revenue come from</span></div>
+      <div class="card">
+        <div class="config-row">
+          <div><div class="label">Ad network</div><div class="desc">Not connected — reward-based ad networks: Adsterra, PropellerAds, Monetag. Google AdSense cannot be used for pay-per-view rewards.</div></div>
+          <button class="ghost">Connect</button>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  const el = (id) => document.getElementById(id);
+  let API_BASE = '';
+  let ADMIN_KEY = '';
+
+  async function adminApi(path, options = {}) {
+    const res = await fetch(API_BASE + path, {
+      ...options,
+      headers: { 'Content-Type': 'application/json', 'x-admin-key': ADMIN_KEY, ...(options.headers || {}) },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+
+  el('gateBtn').addEventListener('click', async () => {
+    API_BASE = el('apiBaseInput').value;
+    ADMIN_KEY = el('adminKeyInput').value;
+    el('gateError').textContent = '';
+    try {
+      await adminApi('/admin/stats');
+      el('gate').style.display = 'none';
+      el('adminApp').style.display = 'block';
+      loadAll();
+    } catch (err) {
+      el('gateError').textContent = 'Wrong admin key or backend not reachable.';
+    }
+  });
+
+  async function loadStats() {
+    const s = await adminApi('/admin/stats');
+    el('platformRevenue').textContent = '₹' + s.platformRevenueInr.toFixed(2);
+    el('userPayout').textContent = '₹' + s.userPayoutInr.toFixed(2);
+    el('totalAds').textContent = s.adsServed.toLocaleString('en-IN');
+    el('totalUsers').textContent = s.totalUsers.toLocaleString('en-IN');
+    el('userShareInput').value = s.config.user_share_percent;
+    el('rateInput').value = (s.config.coin_to_inr * 100).toFixed(2);
+    el('minWithdrawInput').value = s.config.min_withdraw_inr;
+    el('dailyLimitInput').value = s.config.daily_free_limit;
+  }
+
+  async function loadWithdrawals() {
+    const rows = await adminApi('/admin/withdrawals');
+    const body = el('withdrawTable');
+    if (rows.length === 0) {
+      body.innerHTML = `<tr><td colspan="5" style="color:var(--text-dim);">No withdrawal requests yet.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map(w => {
+      const time = new Date(w.requested_at).toLocaleString('en-IN');
+      return `
+        <tr>
+          <td>${w.name}<br><span style="color:var(--text-dim); font-size:0.78rem;">${w.email}</span></td>
+          <td class="pos">₹${w.amount_inr.toFixed(2)}</td>
+          <td style="color:var(--text-dim);">${time}</td>
+          <td><span class="status-pill ${w.status}">${w.status === 'pending' ? 'Pending' : 'Paid'}</span></td>
+          <td>${w.status === 'pending' ? `<button onclick="markPaid(${w.id})">Mark Paid</button>` : ''}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  window.markPaid = async function (id) {
+    try {
+      await adminApi(`/admin/withdrawals/${id}/mark-paid`, { method: 'POST' });
+      await loadWithdrawals();
+      await loadStats();
+    } catch (err) {
+      alert(err.message);
+    }
+  };
+
+  el('saveConfigBtn').addEventListener('click', async () => {
+    try {
+      await adminApi('/admin/config', {
+        method: 'POST',
+        body: JSON.stringify({
+          user_share_percent: Number(el('userShareInput').value),
+          coin_to_inr: Number(el('rateInput').value) / 100,
+          min_withdraw_inr: Number(el('minWithdrawInput').value),
+          daily_free_limit: Number(el('dailyLimitInput').value),
+        }),
+      });
+      await loadStats();
+      alert('Settings saved — takes effect immediately for all users.');
+    } catch (err) {
+      alert(err.message);
+    }
+  });
+
+  function loadAll() {
+    loadStats();
+    loadWithdrawals();
+  }
+</script>
+
+</body>
+</html>

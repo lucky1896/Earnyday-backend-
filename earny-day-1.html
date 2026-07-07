@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earny Day — Watch. Earn. Daily.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+  :root{
+    --bg:#f7f8fa; --surface:#ffffff; --surface-alt:#f1f3f6; --line:#e3e6ec;
+    --primary:#0f6b5c; --primary-soft:rgba(15,107,92,0.09);
+    --accent:#a8751f; --accent-soft:rgba(168,117,31,0.10);
+    --indigo:#4c4fe0; --indigo-soft:rgba(76,79,224,0.09);
+    --text:#101828; --text-dim:#667085; --radius:12px;
+    --shadow:0 1px 2px rgba(16,24,40,0.06);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; line-height:1.5; min-height:100vh; padding-bottom:78px; }
+  h1,h2,h3{ font-family:'Inter',sans-serif; font-weight:700; letter-spacing:-0.01em; }
+  .mono{ font-family:'JetBrains Mono',monospace; }
+  .wrap{ max-width:1080px; margin:0 auto; padding:0 24px; }
+
+  /* ---------- auth screen ---------- */
+  #authScreen{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .auth-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:32px; width:100%; max-width:380px; }
+  .auth-card h1{ font-size:1.4rem; margin-bottom:6px; }
+  .auth-card p.sub{ color:var(--text-dim); font-size:0.88rem; margin-bottom:22px; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:0.82rem; font-weight:600; margin-bottom:6px; }
+  .field input{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+    font-family:'Inter',sans-serif; font-size:0.92rem; background:var(--surface-alt); color:var(--text);
+  }
+  .field input:focus{ outline:2px solid var(--primary-soft); border-color:var(--primary); }
+  .field.pw-field{ position:relative; }
+  .field.pw-field input{ padding-right:44px; }
+  .pw-toggle{
+    position:absolute; right:6px; top:29px; background:none; border:none; cursor:pointer;
+    padding:6px 8px; font-size:0.78rem; font-weight:600; color:var(--text-dim); border-radius:6px;
+  }
+  .pw-toggle:hover{ color:var(--primary); }
+  .resend-row{ text-align:center; font-size:0.82rem; color:var(--text-dim); margin-top:4px; }
+  .resend-row a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
+  .resend-row.disabled a{ color:var(--text-dim); pointer-events:none; }
+  .auth-error{ color:#c4432f; font-size:0.82rem; margin-bottom:10px; min-height:1em; }
+  .auth-switch{ text-align:center; margin-top:16px; font-size:0.85rem; color:var(--text-dim); }
+  .auth-switch a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
+  /* ---------- app shell (hidden until logged in) ---------- */
+  #app{ display:none; }
+
+  header.topbar{ position:sticky; top:0; z-index:20; background:var(--surface); border-bottom:1px solid var(--line); }
+  .topbar-inner{ display:flex; align-items:center; justify-content:space-between; padding:16px 24px; }
+  .logo{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem; }
+  .logo-mark{ width:28px; height:28px; border-radius:8px; background:var(--primary); position:relative; flex-shrink:0; }
+  .logo-mark::after{ content:""; position:absolute; width:10px; height:10px; top:9px; left:9px; background:var(--surface); border-radius:2px; }
+  .wallet-pill{ display:flex; align-items:center; gap:8px; background:var(--surface-alt); border:1px solid var(--line); padding:8px 16px; border-radius:999px; font-size:0.9rem; }
+  .wallet-pill .amt{ color:var(--accent); font-weight:700; }
+  .logout-btn{ background:none; border:none; color:var(--text-dim); font-size:0.78rem; cursor:pointer; padding:4px; }
+
+  nav.tabbar{ position:fixed; bottom:0; left:0; right:0; z-index:30; background:var(--surface); border-top:1px solid var(--line); box-shadow:0 -2px 10px rgba(16,24,40,0.04); display:flex; justify-content:center; }
+  .tabbar-inner{ display:flex; width:100%; max-width:600px; }
+  .tab-btn{ flex:1; background:none; border:none; padding:12px 4px 10px; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-dim); font-size:0.68rem; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif; }
+  .tab-btn .ic{ font-size:1.1rem; }
+  .tab-btn.active{ color:var(--primary); }
+
+  .page{ display:none; padding:32px 0 20px; animation:fadeIn .25s ease; }
+  .page.active{ display:block; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
+  .page-head{ margin-bottom:24px; }
+  .page-head h1{ font-size:1.6rem; }
+  .page-head p{ color:var(--text-dim); font-size:0.92rem; margin-top:6px; }
+  .eyebrow{ display:inline-flex; align-items:center; gap:8px; color:var(--primary); font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px; }
+  .eyebrow::before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--primary); }
+
+  .status-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:22px 26px; margin-bottom:24px; box-shadow:var(--shadow); }
+  .status-top{ display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+  .plan-badge{ padding:5px 14px; border-radius:999px; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+  .plan-badge.free{ background:var(--surface-alt); color:var(--text-dim); border:1px solid var(--line); }
+  .plan-badge.premium{ background:var(--indigo-soft); color:var(--indigo); border:1px solid rgba(76,79,224,0.35); }
+  .usage-label{ display:flex; justify-content:space-between; font-size:0.85rem; color:var(--text-dim); margin-bottom:6px; }
+  .usage-bar{ height:10px; border-radius:999px; background:var(--surface-alt); overflow:hidden; }
+  .usage-fill{ height:100%; background:var(--primary); border-radius:999px; transition:width .4s ease; }
+  .usage-fill.unlimited{ background:linear-gradient(90deg, var(--primary), var(--indigo)); width:100% !important; }
+
+  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:14px; }
+  .stat{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+  .stat .num{ font-size:1.5rem; font-weight:700; }
+  .stat .lab{ color:var(--text-dim); font-size:0.8rem; margin-top:4px; }
+  .stat.you .num{ color:var(--accent); }
+
+  .queue{ display:flex; flex-direction:column; gap:14px; }
+  .ad-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; display:flex; align-items:center; gap:18px; box-shadow:var(--shadow); }
+  .ad-card.active{ border-color:var(--primary); box-shadow:0 0 0 1px var(--primary) inset; }
+  .ad-card.done{ opacity:0.45; }
+  .ad-thumb{ width:64px; height:44px; border-radius:8px; flex-shrink:0; background:var(--surface-alt); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:0.7rem; color:var(--text-dim); }
+  .ad-info{ flex:1; min-width:0; }
+  .ad-info .name{ font-weight:600; font-size:0.95rem; }
+  .ad-info .meta{ color:var(--text-dim); font-size:0.8rem; margin-top:2px; }
+  .ad-action{ flex-shrink:0; min-width:96px; text-align:right; }
+
+  .ring{ width:44px; height:44px; border-radius:50%; background:conic-gradient(var(--primary) calc(var(--p,0) * 1%), var(--line) 0); display:flex; align-items:center; justify-content:center; font-size:0.72rem; font-weight:700; margin-left:auto; }
+  .ring::after{ content:attr(data-t); width:34px; height:34px; border-radius:50%; background:var(--surface); display:flex; align-items:center; justify-content:center; }
+
+  button{ font-family:'Inter',sans-serif; font-weight:600; cursor:pointer; border:none; border-radius:999px; padding:10px 20px; font-size:0.85rem; transition:transform .15s ease, opacity .15s ease; }
+  button:active{ transform:scale(0.96); }
+  button:disabled{ opacity:0.45; cursor:not-allowed; }
+  .btn-claim{ background:var(--primary); color:#ffffff; }
+  .btn-claim:hover:not(:disabled){ opacity:0.9; }
+  .btn-premium{ background:var(--indigo); color:#ffffff; }
+  .btn-premium:hover{ opacity:0.9; }
+  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
+  .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
+  .btn-full{ width:100%; }
+
+  .lock-card{ background:var(--surface); border:1px dashed var(--line); border-radius:var(--radius); padding:28px; text-align:center; }
+  .lock-card .icon{ font-size:2rem; margin-bottom:10px; }
+  .lock-card h3{ font-size:1.1rem; margin-bottom:6px; }
+  .lock-card p{ color:var(--text-dim); font-size:0.88rem; margin-bottom:18px; max-width:340px; margin-left:auto; margin-right:auto; }
+
+  .withdraw-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-bottom:24px; box-shadow:var(--shadow); }
+  .rate{ color:var(--text-dim); font-size:0.82rem; margin-top:6px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:0.88rem; }
+  th{ text-align:left; color:var(--text-dim); font-weight:600; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; padding:8px 10px; border-bottom:1px solid var(--line); }
+  td{ padding:10px 10px; border-bottom:1px solid var(--line); }
+  tr:last-child td{ border-bottom:none; }
+  .pos{ color:var(--primary); }
+
+  .lb-row{ display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; box-shadow:var(--shadow); }
+  .lb-row.you-row{ border-color:var(--primary); box-shadow:0 0 0 1px var(--primary) inset; }
+  .lb-rank{ width:28px; text-align:center; font-weight:700; font-family:'JetBrains Mono',monospace; color:var(--text-dim); }
+  .lb-row.top1 .lb-rank{ color:var(--accent); }
+  .lb-row.top2 .lb-rank{ color:#8a93a6; }
+  .lb-row.top3 .lb-rank{ color:#b07a3a; }
+  .lb-avatar{ width:36px; height:36px; border-radius:50%; background:var(--surface-alt); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem; flex-shrink:0; }
+  .lb-name{ flex:1; font-weight:600; font-size:0.92rem; }
+  .lb-name .you-tag{ color:var(--primary); font-size:0.72rem; font-weight:700; margin-left:6px; }
+  .lb-coins{ font-family:'JetBrains Mono',monospace; color:var(--accent); font-weight:700; font-size:0.9rem; }
+  .lb-footnote{ color:var(--text-dim); font-size:0.85rem; text-align:center; margin-top:14px; padding:14px; border:1px dashed var(--line); border-radius:12px; }
+
+  .plan-compare{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:20px; }
+  .plan-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow); }
+  .plan-card.highlight{ border-color:var(--indigo); box-shadow:0 0 0 1px var(--indigo) inset; }
+  .plan-card .ptitle{ font-size:1.1rem; font-weight:700; margin-bottom:4px; }
+  .plan-card .pprice{ color:var(--text-dim); font-size:0.85rem; margin-bottom:16px; }
+  .plan-card ul{ list-style:none; display:flex; flex-direction:column; gap:10px; margin-bottom:20px; }
+  .plan-card li{ font-size:0.88rem; color:var(--text); display:flex; gap:8px; }
+  .plan-card li::before{ content:"✓"; color:var(--primary); font-weight:700; }
+
+  #toast{ position:fixed; bottom:76px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--text); color:var(--surface); border:1px solid var(--text); padding:14px 22px; border-radius:12px; font-size:0.9rem; opacity:0; pointer-events:none; transition:all .3s ease; z-index:50; text-align:center; max-width:90%; }
+  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .note{ background:var(--surface-alt); border:1px solid var(--line); border-left:3px solid var(--indigo); padding:14px 18px; border-radius:8px; color:var(--text-dim); font-size:0.85rem; margin-top:18px; }
+</style>
+</head>
+<body>
+
+<!-- ============ AUTH SCREEN (login/signup) ============ -->
+<div id="authScreen">
+  <div class="auth-card">
+    <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1 id="authTitle">Log in</h1>
+    <p class="sub" id="authSub">Welcome back — watch ads, earn coins.</p>
+
+    <div class="auth-error" id="authError"></div>
+
+    <div class="field" id="nameField" style="display:none;">
+      <label>Name</label>
+      <input type="text" id="nameInput" placeholder="Your name">
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="emailInput" placeholder="you@example.com">
+    </div>
+    <div class="field pw-field">
+      <label>Password</label>
+      <input type="password" id="passwordInput" placeholder="••••••••">
+      <button type="button" class="pw-toggle" id="pwToggleBtn">Show</button>
+    </div>
+
+    <button class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
+
+    <div class="auth-switch">
+      <span id="authSwitchText">Don't have an account?</span>
+      <a id="authSwitchLink">Sign up</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ OTP VERIFICATION SCREEN ============ -->
+<div id="otpScreen" style="display:none;">
+  <div class="auth-card">
+    <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1>Verify your email</h1>
+    <p class="sub">We sent a 6-digit code to <strong id="otpEmailDisplay"></strong>. Enter it below to activate your account.</p>
+
+    <div class="auth-error" id="otpError"></div>
+
+    <div class="field">
+      <label>Verification code</label>
+      <input type="text" id="otpInput" inputmode="numeric" maxlength="6" placeholder="123456" style="letter-spacing:0.3em; font-family:'JetBrains Mono',monospace; text-align:center; font-size:1.1rem;">
+    </div>
+
+    <button class="btn-claim btn-full" id="otpSubmitBtn">Verify & Continue</button>
+
+    <div class="resend-row" id="resendRow">
+      Didn't get a code? <a id="resendOtpLink">Resend code</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MAIN APP ============ -->
+<div id="app">
+
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo"><span class="logo-mark"></span> Earny Day</div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="wallet-pill">💰 <span class="amt mono" id="walletBalance">0</span> coins</div>
+        <button class="logout-btn" id="logoutBtn">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <section id="page-dashboard" class="page active">
+      <div class="eyebrow">Your Account</div>
+      <div class="page-head">
+        <h1 id="welcomeName">Welcome back</h1>
+        <p>Here's your activity for today.</p>
+      </div>
+
+      <div class="status-card">
+        <div class="status-top">
+          <div><div style="font-weight:700; font-size:1.05rem;">Daily ad usage</div></div>
+          <span class="plan-badge free" id="planBadge">Free Plan</span>
+        </div>
+        <div class="usage-label"><span id="usageLabel">0 / 150 ads watched today</span></div>
+        <div class="usage-bar"><div class="usage-fill" id="usageFill" style="width:0%;"></div></div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat you"><div class="num mono" id="statEarned">0</div><div class="lab">Coins earned (all time)</div></div>
+        <div class="stat"><div class="num mono" id="statAdsWatched">0</div><div class="lab">Ads watched today</div></div>
+        <div class="stat"><div class="num mono" id="statINR">₹0.00</div><div class="lab">Wallet value</div></div>
+        <div class="stat"><div class="num mono" id="statRank">Not ranked</div><div class="lab">Today's leaderboard</div></div>
+      </div>
+    </section>
+
+    <section id="page-ads" class="page">
+      <div class="page-head">
+        <h1>Ad Queue</h1>
+        <p>Ads run one after another. Each one needs a quick tap to confirm you're watching.</p>
+      </div>
+      <div class="queue" id="queue"></div>
+    </section>
+
+    <section id="page-wallet" class="page">
+      <div class="page-head"><h1>Wallet</h1><p>Your balance, conversion rate, and withdrawal.</p></div>
+      <div class="withdraw-card">
+        <div>
+          <div style="font-size:1.3rem; font-weight:700;" class="mono"><span id="withdrawAvailable">₹0.00</span> available</div>
+          <div class="rate" id="withdrawRateText">100 coins = ₹1.00 · Minimum withdrawal ₹50.00</div>
+        </div>
+        <button class="btn-claim" id="withdrawBtn" disabled>Request Withdrawal</button>
+      </div>
+      <h2 style="font-size:1.1rem; margin-bottom:14px;">History</h2>
+      <table>
+        <thead><tr><th>Ad</th><th>Time</th><th>Coins</th></tr></thead>
+        <tbody id="historyBody"><tr><td colspan="3" style="color:var(--text-dim);">Loading…</td></tr></tbody>
+      </table>
+      <div class="note">Withdrawals are approved manually by the admin until an automated payout API (RazorpayX, business KYC required) is connected.</div>
+    </section>
+
+    <section id="page-leaderboard" class="page">
+      <div class="page-head"><h1>Leaderboard</h1><p>Today's top 10 earners only.</p></div>
+      <div id="leaderboardList"></div>
+      <div id="leaderboardFootnote" class="lb-footnote" style="display:none;"></div>
+    </section>
+
+    <section id="page-premium" class="page">
+      <div class="page-head"><h1>Premium</h1><p>Remove your daily ad limit and earn without a cap.</p></div>
+      <div class="plan-compare">
+        <div class="plan-card" id="freeCard">
+          <div class="ptitle">Free</div><div class="pprice">₹0 / month</div>
+          <ul><li>Up to 150 ads per day</li><li>Standard payout speed</li><li>Leaderboard access</li></ul>
+          <button class="btn-ghost" id="currentPlanBtnFree" disabled>Current Plan</button>
+        </div>
+        <div class="plan-card highlight" id="premiumCard">
+          <div class="ptitle">Premium</div><div class="pprice">₹99 / month</div>
+          <ul><li>Unlimited ads per day</li><li>Priority payout</li><li>Premium badge on leaderboard</li></ul>
+          <button class="btn-premium" id="upgradeBtn">Upgrade to Premium</button>
+        </div>
+      </div>
+      <div class="note">Payment is processed by Razorpay. In test mode, use Razorpay's test card numbers — no real money moves until you switch to live keys.</div>
+    </section>
+
+  </main>
+
+  <nav class="tabbar">
+    <div class="tabbar-inner">
+      <button class="tab-btn active" data-page="dashboard"><span class="ic">🏠</span>Dashboard</button>
+      <button class="tab-btn" data-page="ads"><span class="ic">▶️</span>Ads</button>
+      <button class="tab-btn" data-page="wallet"><span class="ic">👛</span>Wallet</button>
+      <button class="tab-btn" data-page="leaderboard"><span class="ic">🏆</span>Leaders</button>
+      <button class="tab-btn" data-page="premium"><span class="ic">⭐</span>Premium</button>
+    </div>
+  </nav>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const el = (id) => document.getElementById(id);
+  // Same-origin path — works because this file is now served by the same backend.
+  let API_BASE = '/api';
+  let authToken = null;     // kept in memory only — see README for production session storage advice
+  let isSignupMode = false;
+  let queueState = [];      // client-side visual queue; server is the source of truth for limits
+  let idCounter = 0;
+
+  const AD_META_FALLBACK = "Video · 5s";
+
+  // ---------- API helper ----------
+  async function api(path, options = {}) {
+    const res = await fetch(API_BASE + path, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: 'Bearer ' + authToken } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+
+  // ---------- auth screen ----------
+  // ---------- password show/hide ----------
+  el('pwToggleBtn').addEventListener('click', () => {
+    const input = el('passwordInput');
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    el('pwToggleBtn').textContent = showing ? 'Show' : 'Hide';
+  });
+
+  let pendingEmail = ''; // email waiting on OTP verification
+
+  function showAuthScreen() {
+    el('otpScreen').style.display = 'none';
+    el('authScreen').style.display = 'flex';
+  }
+  function showOtpScreen(email) {
+    pendingEmail = email;
+    el('otpEmailDisplay').textContent = email;
+    el('otpError').textContent = '';
+    el('otpInput').value = '';
+    el('authScreen').style.display = 'none';
+    el('otpScreen').style.display = 'flex';
+  }
+
+  el('authSwitchLink').addEventListener('click', () => {
+    isSignupMode = !isSignupMode;
+    el('authTitle').textContent = isSignupMode ? 'Sign up' : 'Log in';
+    el('authSub').textContent = isSignupMode ? 'Create an account to start earning.' : 'Welcome back — watch ads, earn coins.';
+    el('authSubmitBtn').textContent = isSignupMode ? 'Sign up' : 'Log in';
+    el('nameField').style.display = isSignupMode ? 'block' : 'none';
+    el('authSwitchText').textContent = isSignupMode ? 'Already have an account?' : "Don't have an account?";
+    el('authSwitchLink').textContent = isSignupMode ? 'Log in' : 'Sign up';
+    el('authError').textContent = '';
+  });
+
+  el('authSubmitBtn').addEventListener('click', async () => {
+    const email = el('emailInput').value.trim();
+    const password = el('passwordInput').value;
+    const name = el('nameInput').value.trim();
+    el('authError').textContent = '';
+
+    const btn = el('authSubmitBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Connecting…';
+
+    try {
+      if (isSignupMode) {
+        const data = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ name, email, password }) });
+        showOtpScreen(data.email || email);
+      } else {
+        const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+        if (data.needsVerification) { showOtpScreen(email); return; }
+        authToken = data.token;
+        await enterApp(data.user.name);
+      }
+    } catch (err) {
+      el('authError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalLabel;
+    }
+  });
+
+  el('otpSubmitBtn').addEventListener('click', async () => {
+    const otp = el('otpInput').value.trim();
+    el('otpError').textContent = '';
+    try {
+      const data = await api('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail, otp }) });
+      authToken = data.token;
+      await enterApp(data.user.name);
+    } catch (err) {
+      el('otpError').textContent = err.message;
+    }
+  });
+
+  function attachResendHandler() {
+    const link = document.getElementById('resendOtpLink');
+    if (link) link.addEventListener('click', resendOtpHandler);
+  }
+
+  async function resendOtpHandler() {
+    try {
+      await api('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail }) });
+      el('otpError').textContent = '';
+      const row = el('resendRow');
+      row.classList.add('disabled');
+      let secs = 30;
+      row.innerHTML = `Didn't get a code? <a>Resend in ${secs}s</a>`;
+      const tick = setInterval(() => {
+        secs -= 1;
+        if (secs <= 0) {
+          clearInterval(tick);
+          row.classList.remove('disabled');
+          row.innerHTML = `Didn't get a code? <a id="resendOtpLink">Resend code</a>`;
+          attachResendHandler();
+        } else {
+          row.innerHTML = `Didn't get a code? <a>Resend in ${secs}s</a>`;
+        }
+      }, 1000);
+    } catch (err) {
+      el('otpError').textContent = err.message;
+    }
+  }
+  attachResendHandler();
+
+  async function enterApp(name) {
+    el('welcomeName').textContent = 'Welcome, ' + name;
+    el('otpScreen').style.display = 'none';
+    el('authScreen').style.display = 'none';
+    el('app').style.display = 'block';
+    await refreshEverything();
+  }
+
+  el('logoutBtn').addEventListener('click', () => {
+    authToken = null;
+    el('app').style.display = 'none';
+    showAuthScreen();
+  });
+
+  // ---------- tab navigation ----------
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      el('page-' + btn.dataset.page).classList.add('active');
+      if (btn.dataset.page === 'leaderboard') loadLeaderboard();
+      if (btn.dataset.page === 'wallet') loadHistory();
+    });
+  });
+
+  window.goToPremium = function () {
+    document.querySelector('.tab-btn[data-page="premium"]').click();
+  };
+
+  // ---------- ad queue (server-validated) ----------
+  let serverState = { isPremium: false, adsWatchedToday: 0, dailyLimit: 150, atLimit: false, coinPerAd: 12, ads: [] };
+
+  async function loadQueue() {
+    serverState = await api('/ads/queue');
+    if (queueState.length === 0 && !serverState.atLimit) {
+      queueState = serverState.ads.slice(0, 4).map((a, i) => ({
+        ...a, id: idCounter++, status: i === 0 ? 'active' : 'pending', progress: 0,
+      }));
+    }
+    renderQueue();
+    renderPlanUI();
+    if (queueState.some(a => a.status === 'active')) startActiveTimer();
+  }
+
+  function renderQueue() {
+    const container = el('queue');
+    container.innerHTML = '';
+
+    if (serverState.atLimit) {
+      container.innerHTML = `
+        <div class="lock-card">
+          <div class="icon">🔒</div>
+          <h3>You've hit today's free limit</h3>
+          <p>Free accounts can watch up to ${serverState.dailyLimit} ads a day. Upgrade to Premium for unlimited ads, or come back tomorrow.</p>
+          <button class="btn-premium" onclick="goToPremium()">See Premium</button>
+        </div>`;
+      return;
+    }
+
+    queueState.forEach(ad => {
+      const card = document.createElement('div');
+      card.className = 'ad-card' + (ad.status === 'active' ? ' active' : '') + (ad.status === 'done' ? ' done' : '');
+      card.innerHTML = `
+        <div class="ad-thumb">AD</div>
+        <div class="ad-info"><div class="name">${ad.name}</div><div class="meta">${ad.meta || AD_META_FALLBACK}</div></div>
+        <div class="ad-action" id="action-${ad.id}"></div>`;
+      container.appendChild(card);
+      renderAction(ad);
+    });
+  }
+
+  function renderAction(ad) {
+    const actionEl = el('action-' + ad.id);
+    if (!actionEl) return;
+    if (ad.status === 'done') {
+      actionEl.innerHTML = `<span style="color:var(--primary); font-size:0.85rem;">✓ Claimed</span>`;
+    } else if (ad.status === 'pending') {
+      actionEl.innerHTML = `<span style="color:var(--text-dim); font-size:0.8rem;">In queue</span>`;
+    } else if (ad.status === 'active') {
+      if (ad.progress < 100) {
+        actionEl.innerHTML = `<div class="ring" style="--p:${ad.progress}" data-t="${Math.ceil((100 - ad.progress) / 20)}s"></div>`;
+      } else {
+        actionEl.innerHTML = `<button class="btn-claim" onclick="claimAd(${ad.id})">Claim +${serverState.coinPerAd}</button>`;
+      }
+    }
+  }
+
+  function startActiveTimer() {
+    const active = queueState.find(a => a.status === 'active');
+    if (!active) return;
+    const interval = setInterval(() => {
+      active.progress += 4;
+      if (active.progress >= 100) { active.progress = 100; clearInterval(interval); }
+      renderAction(active);
+    }, 200);
+  }
+
+  window.claimAd = async function (id) {
+    const ad = queueState.find(a => a.id === id);
+    if (!ad || ad.status !== 'active') return;
+
+    try {
+      const result = await api('/ads/claim', { method: 'POST', body: JSON.stringify({ adName: ad.name }) });
+      ad.status = 'done';
+      showToast(`+${result.coinsAwarded} coins added to your wallet!`);
+
+      queueState = queueState.filter(a => a.id !== id);
+      const next = queueState.find(a => a.status === 'pending');
+
+      // refresh server truth (limit, wallet, ads watched) after each claim
+      serverState = await api('/ads/queue');
+
+      if (next && !serverState.atLimit) {
+        next.status = 'active';
+        const template = serverState.ads[queueState.length % serverState.ads.length];
+        queueState.push({ ...template, id: idCounter++, status: 'pending', progress: 0 });
+      }
+
+      await refreshWalletStats();
+      renderQueue();
+      if (next && !serverState.atLimit) startActiveTimer();
+    } catch (err) {
+      showToast(err.message);
+      serverState = await api('/ads/queue');
+      renderQueue();
+      renderPlanUI();
+    }
+  };
+
+  // ---------- wallet + history ----------
+  async function refreshWalletStats() {
+    const me = await api('/wallet/me');
+    el('walletBalance').textContent = me.wallet_coins;
+    el('statEarned').textContent = me.total_earned;
+    el('statAdsWatched').textContent = me.ads_watched_today;
+    el('statINR').textContent = '₹' + me.walletInr.toFixed(2);
+    el('withdrawAvailable').textContent = '₹' + me.walletInr.toFixed(2);
+    el('withdrawBtn').disabled = me.walletInr < me.minWithdrawInr;
+    el('withdrawRateText').textContent = `Minimum withdrawal ₹${me.minWithdrawInr.toFixed(2)}`;
+    serverState.isPremium = !!me.is_premium;
+    renderPlanUI();
+  }
+
+  async function loadHistory() {
+    const rows = await api('/wallet/history');
+    const body = el('historyBody');
+    if (rows.length === 0) {
+      body.innerHTML = `<tr><td colspan="3" style="color:var(--text-dim);">No ads completed yet — head to the Ads tab to start.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const time = new Date(r.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      return `<tr><td>${r.ad_name}</td><td>${time}</td><td class="pos">+${r.coins}</td></tr>`;
+    }).join('');
+  }
+
+  el('withdrawBtn').addEventListener('click', async () => {
+    try {
+      const result = await api('/withdraw/request', { method: 'POST', body: JSON.stringify({}) });
+      showToast(`Withdrawal request sent for ₹${result.amountInr.toFixed(2)} — pending admin approval.`);
+      await refreshWalletStats();
+      loadHistory();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // ---------- leaderboard ----------
+  async function loadLeaderboard() {
+    const data = await api('/leaderboard/top10');
+    const list = el('leaderboardList');
+    list.innerHTML = '';
+    data.top10.forEach((u, i) => {
+      const row = document.createElement('div');
+      row.className = 'lb-row' + (i === 0 ? ' top1' : i === 1 ? ' top2' : i === 2 ? ' top3' : '');
+      row.innerHTML = `
+        <div class="lb-rank">${i + 1}</div>
+        <div class="lb-avatar">${u.name[0]}</div>
+        <div class="lb-name">${u.name}</div>
+        <div class="lb-coins mono">${u.total_earned.toLocaleString('en-IN')}</div>`;
+      list.appendChild(row);
+    });
+
+    const footnote = el('leaderboardFootnote');
+    if (data.yourRank && data.yourRank > 10) {
+      footnote.style.display = 'block';
+      footnote.textContent = `You're currently #${data.yourRank} — watch more ads to break into today's top 10.`;
+    } else {
+      footnote.style.display = 'none';
+    }
+    el('statRank').textContent = data.yourRank ? (data.yourRank <= 10 ? '#' + data.yourRank + ' today' : 'Outside top 10') : 'Not ranked';
+  }
+
+  // ---------- premium (Razorpay) ----------
+  function renderPlanUI() {
+    el('planBadge').textContent = serverState.isPremium ? 'Premium Plan' : 'Free Plan';
+    el('planBadge').className = 'plan-badge ' + (serverState.isPremium ? 'premium' : 'free');
+
+    const fill = el('usageFill');
+    if (serverState.isPremium) {
+      fill.className = 'usage-fill unlimited';
+      el('usageLabel').textContent = `${serverState.adsWatchedToday} ads watched today · Unlimited`;
+    } else {
+      fill.className = 'usage-fill';
+      const pct = Math.min(100, (serverState.adsWatchedToday / serverState.dailyLimit) * 100);
+      fill.style.width = pct + '%';
+      el('usageLabel').textContent = `${serverState.adsWatchedToday} / ${serverState.dailyLimit} ads watched today`;
+    }
+
+    el('upgradeBtn').textContent = serverState.isPremium ? 'You are Premium ✓' : 'Upgrade to Premium';
+    el('upgradeBtn').disabled = serverState.isPremium;
+    el('premiumCard').classList.toggle('highlight', !serverState.isPremium);
+  }
+
+  el('upgradeBtn').addEventListener('click', async () => {
+    if (serverState.isPremium) return;
+    try {
+      const { order, keyId } = await api('/payment/create-order', { method: 'POST' });
+      const rzp = new Razorpay({
+        key: keyId,
+        amount: order.amount,
+        currency: order.currency,
+        order_id: order.id,
+        name: 'Earny Day',
+        description: 'Premium subscription (unlimited ads)',
+        handler: async function (response) {
+          try {
+            await api('/payment/verify', { method: 'POST', body: JSON.stringify(response) });
+            showToast('Premium unlocked — unlimited ads from now on!');
+            await loadQueue();
+            await refreshWalletStats();
+          } catch (err) {
+            showToast('Payment verification failed: ' + err.message);
+          }
+        },
+        theme: { color: '#0f6b5c' },
+      });
+      rzp.open();
+    } catch (err) {
+      showToast('Could not start payment: ' + err.message);
+    }
+  });
+
+  // ---------- toast ----------
+  function showToast(msg) {
+    const t = el('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  // ---------- init after login ----------
+  async function refreshEverything() {
+    await refreshWalletStats();
+    await loadQueue();
+    await loadHistory();
+  }
+</script>
+
+</body>
+</html>

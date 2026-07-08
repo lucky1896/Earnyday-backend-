@@ -12,7 +12,6 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const Database = require('better-sqlite3');
 const Razorpay = require('razorpay');
-const nodemailer = require('nodemailer');
 
 const app = express();
 app.use(cors());
@@ -68,28 +67,30 @@ if (!db.prepare('SELECT * FROM config WHERE id = 1').get()) {
 }
 function getConfig() { return db.prepare('SELECT * FROM config WHERE id = 1').get(); }
 
-// ---------- MAILER ----------
-let transporter = null;
-if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
-  transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: Number(process.env.SMTP_PORT) === 465,
-    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
-  });
-}
+// ---------- MAILER (uses Brevo's HTTP API over port 443 — Render's free tier blocks SMTP ports) ----------
 async function sendOtpEmail(toEmail, otp) {
-  if (!transporter) {
-    console.log(`[DEV — no SMTP configured] OTP for ${toEmail}: ${otp}`);
+  if (!process.env.BREVO_API_KEY || !process.env.SMTP_FROM) {
+    console.log(`[DEV — no Brevo API key configured] OTP for ${toEmail}: ${otp}`);
     return;
   }
-  await transporter.sendMail({
-    from: process.env.SMTP_FROM || process.env.SMTP_USER,
-    to: toEmail,
-    subject: 'Your Earny Day verification code',
-    text: `Your verification code is ${otp}. It expires in 10 minutes.`,
-    html: `<p>Your verification code is <b style="font-size:20px;">${otp}</b>.</p><p>It expires in 10 minutes.</p>`,
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'api-key': process.env.BREVO_API_KEY,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify({
+      sender: { name: 'Earny Day', email: process.env.SMTP_FROM },
+      to: [{ email: toEmail }],
+      subject: 'Your Earny Day verification code',
+      htmlContent: `<p>Your verification code is <b style="font-size:20px;">${otp}</b>.</p><p>It expires in 10 minutes.</p>`,
+    }),
   });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`Brevo API error (${res.status}): ${body}`);
+  }
 }
 
 // ---------- AUTH HELPERS ----------
@@ -147,7 +148,7 @@ app.post('/api/auth/signup', async (req, res) => {
   try {
     await issueAndSendOtp(user);
   } catch (err) {
-    return res.status(500).json({ error: 'Could not send verification email. Try again shortly.' });
+    return res.status(500).json({ error: 'DEBUG: ' + err.message });
   }
   res.json({ message: 'Verification code sent to your email', email: user.email });
 });
@@ -172,7 +173,7 @@ app.post('/api/auth/resend-otp', async (req, res) => {
   try {
     await issueAndSendOtp(user);
   } catch (err) {
-    return res.status(500).json({ error: 'Could not send verification email. Try again shortly.' });
+    return res.status(500).json({ error: 'DEBUG: ' + err.message });
   }
   res.json({ message: 'A new code has been sent' });
 });
@@ -323,4 +324,3 @@ app.post('/api/admin/config', requireAdmin, (req, res) => {
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Earny Day API running on port ${PORT}`));
-  

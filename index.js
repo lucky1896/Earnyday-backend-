@@ -148,7 +148,7 @@ app.post('/api/auth/signup', async (req, res) => {
   try {
     await issueAndSendOtp(user);
   } catch (err) {
-    return res.status(500).json({ error: 'DEBUG: ' + err.message });
+    return res.status(500).json({ error: 'Could not send verification email. Try again shortly.' });
   }
   res.json({ message: 'Verification code sent to your email', email: user.email });
 });
@@ -173,7 +173,7 @@ app.post('/api/auth/resend-otp', async (req, res) => {
   try {
     await issueAndSendOtp(user);
   } catch (err) {
-    return res.status(500).json({ error: 'DEBUG: ' + err.message });
+    return res.status(500).json({ error: 'Could not send verification email. Try again shortly.' });
   }
   res.json({ message: 'A new code has been sent' });
 });
@@ -324,3 +324,4 @@ app.post('/api/admin/config', requireAdmin, (req, res) => {
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`Earny Day API running on port ${PORT}`));
+                                                          

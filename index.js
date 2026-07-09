@@ -332,10 +332,10 @@ app.post('/api/ads/claim', requireAuth, async (req, res) => {
 
 // ---------- TASKS (CPA Offerwall — higher-paying tasks like signups, app installs, surveys) ----------
 app.get('/api/tasks/wall-url', requireAuth, async (req, res) => {
-  if (!process.env.CPALEAD_OFFERWALL_ID) {
+  if (!process.env.MYLEAD_LOCKER_ID) {
     return res.status(503).json({ error: 'Offerwall not configured yet.' });
   }
-  const url = `https://cpalead.com/dashboard/tools/offerwall/id/${process.env.CPALEAD_OFFERWALL_ID}?subid=${req.userId}`;
+  const url = `https://reward-me.eu/${process.env.MYLEAD_LOCKER_ID}?player_id=${req.userId}`;
   res.json({ url });
 });
 

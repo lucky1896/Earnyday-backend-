@@ -276,6 +276,20 @@
       <div class="note">Withdrawals are approved manually by the admin until an automated payout API (RazorpayX, business KYC required) is connected.</div>
     </section>
 
+    <section id="page-tasks" class="page">
+      <div class="page-head">
+        <h1>Tasks</h1>
+        <p>Higher-paying tasks — sign up for an app, try a service, complete a survey. Pays much more than watching an ad.</p>
+      </div>
+      <div id="tasksWallWrap">
+        <div class="lock-card">
+          <div class="icon">⏳</div>
+          <h3>Loading tasks…</h3>
+          <p>If this doesn't load, tasks may not be set up yet.</p>
+        </div>
+      </div>
+    </section>
+
     <section id="page-leaderboard" class="page">
       <div class="page-head"><h1>Leaderboard</h1><p>Today's top 10 earners only.</p></div>
       <div id="leaderboardList"></div>
@@ -305,6 +319,7 @@
     <div class="tabbar-inner">
       <button class="tab-btn active" data-page="dashboard"><span class="ic">🏠</span>Dashboard</button>
       <button class="tab-btn" data-page="ads"><span class="ic">▶️</span>Ads</button>
+      <button class="tab-btn" data-page="tasks"><span class="ic">🎯</span>Tasks</button>
       <button class="tab-btn" data-page="wallet"><span class="ic">👛</span>Wallet</button>
       <button class="tab-btn" data-page="leaderboard"><span class="ic">🏆</span>Leaders</button>
       <button class="tab-btn" data-page="premium"><span class="ic">⭐</span>Premium</button>
@@ -468,6 +483,7 @@
       btn.classList.add('active');
       el('page-' + btn.dataset.page).classList.add('active');
       if (btn.dataset.page === 'leaderboard') loadLeaderboard();
+      if (btn.dataset.page === 'tasks') loadTasksWall();
       if (btn.dataset.page === 'wallet') loadHistory();
     });
   });
@@ -615,6 +631,25 @@
   });
 
   // ---------- leaderboard ----------
+  // ---------- tasks (CPA offerwall) ----------
+  let tasksLoaded = false;
+  async function loadTasksWall() {
+    if (tasksLoaded) return; // only need to load once per session
+    try {
+      const { url } = await api('/tasks/wall-url');
+      document.getElementById('tasksWallWrap').innerHTML =
+        `<iframe src="${url}" style="width:100%; min-height:70vh; border:1px solid var(--line); border-radius:12px; background:var(--surface);"></iframe>`;
+      tasksLoaded = true;
+    } catch (err) {
+      document.getElementById('tasksWallWrap').innerHTML = `
+        <div class="lock-card">
+          <div class="icon">🚧</div>
+          <h3>Tasks coming soon</h3>
+          <p>${err.message}</p>
+        </div>`;
+    }
+  }
+
   async function loadLeaderboard() {
     const data = await api('/leaderboard/top10');
     const list = el('leaderboardList');

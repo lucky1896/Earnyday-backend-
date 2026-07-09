@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+          <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -78,7 +78,7 @@
     <h1>Admin Access</h1>
     <p>Enter your backend URL and admin key (set in the backend's .env file).</p>
     <div class="gate-error" id="gateError"></div>
-    <input type="text" id="apiBaseInput" value="https://earnyday-backend.onrender.com/api" placeholder="Backend API URL">
+    <input type="text" id="apiBaseInput" value="http://localhost:4000/api" placeholder="Backend API URL">
     <input type="password" id="adminKeyInput" placeholder="Admin key">
     <button style="width:100%;" id="gateBtn">Enter Dashboard</button>
   </div>
@@ -89,7 +89,10 @@
   <header class="topbar">
     <div class="topbar-inner">
       <div class="logo"><span class="logo-mark"></span> Earny Day</div>
-      <span class="badge">Admin Only</span>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <span class="badge">Admin Only</span>
+        <button class="ghost" id="adminLogoutBtn" style="padding:6px 14px; font-size:0.78rem;">Log out</button>
+      </div>
     </div>
   </header>
 
@@ -124,6 +127,14 @@
         <div class="config-row">
           <div><div class="label">Daily free ad limit</div><div class="desc">Max ads per day for non-Premium users</div></div>
           <div style="display:flex; align-items:center; gap:8px;"><input type="number" id="dailyLimitInput" min="1"></div>
+        </div>
+        <div class="config-row">
+          <div><div class="label">User share on Task rewards (CPA offerwall)</div><div class="desc">Percentage of offerwall task payout passed on to the user</div></div>
+          <div style="display:flex; align-items:center; gap:8px;"><input type="number" id="cpaShareInput" min="0" max="100">%</div>
+        </div>
+        <div class="config-row">
+          <div><div class="label">USD to ₹ exchange rate</div><div class="desc">Used to convert CPA network payouts (in USD) into coins</div></div>
+          <div style="display:flex; align-items:center; gap:8px;">$1 = ₹<input type="number" id="usdRateInput" min="1" step="0.1"></div>
         </div>
         <div style="margin-top:16px; display:flex; gap:10px;">
           <button id="saveConfigBtn">Save Settings</button>
@@ -193,6 +204,8 @@
     el('rateInput').value = (s.config.coin_to_inr * 100).toFixed(2);
     el('minWithdrawInput').value = s.config.min_withdraw_inr;
     el('dailyLimitInput').value = s.config.daily_free_limit;
+    el('cpaShareInput').value = s.config.cpa_user_share_percent;
+    el('usdRateInput').value = s.config.usd_to_inr_rate;
   }
 
   async function loadWithdrawals() {
@@ -234,6 +247,8 @@
           coin_to_inr: Number(el('rateInput').value) / 100,
           min_withdraw_inr: Number(el('minWithdrawInput').value),
           daily_free_limit: Number(el('dailyLimitInput').value),
+          cpa_user_share_percent: Number(el('cpaShareInput').value),
+          usd_to_inr_rate: Number(el('usdRateInput').value),
         }),
       });
       await loadStats();
@@ -241,6 +256,13 @@
     } catch (err) {
       alert(err.message);
     }
+  });
+
+  el('adminLogoutBtn').addEventListener('click', () => {
+    ADMIN_KEY = '';
+    el('adminApp').style.display = 'none';
+    el('gate').style.display = 'flex';
+    el('adminKeyInput').value = '';
   });
 
   function loadAll() {

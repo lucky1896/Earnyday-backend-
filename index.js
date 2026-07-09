@@ -65,6 +65,20 @@ async function initDb() {
       daily_free_limit INTEGER NOT NULL DEFAULT 150,
       user_share_percent INTEGER NOT NULL DEFAULT 80
     );
+    CREATE TABLE IF NOT EXISTS offer_completions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      network_trans_id TEXT UNIQUE NOT NULL,
+      offer_id TEXT,
+      payout_usd NUMERIC NOT NULL,
+      coins_awarded INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+  // Migration-safe: add new config columns if this table already existed before these were introduced
+  await pool.query(`
+    ALTER TABLE config ADD COLUMN IF NOT EXISTS cpa_user_share_percent INTEGER NOT NULL DEFAULT 75;
+    ALTER TABLE config ADD COLUMN IF NOT EXISTS usd_to_inr_rate NUMERIC NOT NULL DEFAULT 85;
   `);
   const { rows } = await pool.query('SELECT * FROM config WHERE id = 1');
   if (rows.length === 0) {
@@ -316,6 +330,61 @@ app.post('/api/ads/claim', requireAuth, async (req, res) => {
   }
 });
 
+// ---------- TASKS (CPA Offerwall — higher-paying tasks like signups, app installs, surveys) ----------
+app.get('/api/tasks/wall-url', requireAuth, async (req, res) => {
+  if (!process.env.CPALEAD_OFFERWALL_ID) {
+    return res.status(503).json({ error: 'Offerwall not configured yet.' });
+  }
+  const url = `https://cpalead.com/dashboard/tools/offerwall/id/${process.env.CPALEAD_OFFERWALL_ID}?subid=${req.userId}`;
+  res.json({ url });
+});
+
+// CPAlead calls this URL automatically (server-to-server) whenever a user completes a task.
+// Configure this exact URL as your "Postback URL" in the CPAlead dashboard:
+//   https://your-backend-url/api/tasks/postback?subid={subid}&payout={payout}&trans_id={trans_id}&offer_id={offer_id}
+app.get('/api/tasks/postback', async (req, res) => {
+  try {
+    const { subid, payout, trans_id, offer_id } = req.query;
+    if (!subid || !payout || !trans_id) return res.status(400).send('Missing parameters');
+
+    const userId = parseInt(subid, 10);
+    const payoutUsd = parseFloat(payout);
+    if (!userId || isNaN(payoutUsd)) return res.status(400).send('Invalid parameters');
+
+    // idempotency — CPAlead may retry the same postback
+    const existing = await pool.query('SELECT id FROM offer_completions WHERE network_trans_id = $1', [trans_id]);
+    if (existing.rows.length > 0) return res.send('OK (already processed)');
+
+    const cfg = await getConfig();
+    const payoutInr = payoutUsd * cfg.usd_to_inr_rate;
+    const userShareInr = payoutInr * (cfg.cpa_user_share_percent / 100);
+    const coinsAwarded = Math.round(userShareInr / cfg.coin_to_inr);
+
+    await pool.query('INSERT INTO offer_completions (user_id, network_trans_id, offer_id, payout_usd, coins_awarded) VALUES ($1, $2, $3, $4, $5)',
+      [userId, trans_id, offer_id || null, payoutUsd, coinsAwarded]);
+    await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2',
+      [coinsAwarded, userId]);
+
+    res.send('OK');
+  } catch (err) {
+    console.error('Postback error:', err);
+    res.status(500).send('Error');
+  }
+});
+
+app.get('/api/tasks/history', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT offer_id, coins_awarded, created_at FROM offer_completions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load task history.' });
+  }
+});
+
 // ---------- LEADERBOARD ----------
 app.get('/api/leaderboard/top10', optionalAuth, async (req, res) => {
   try {
@@ -453,16 +522,18 @@ app.get('/api/admin/config', requireAdmin, async (req, res) => {
 });
 app.post('/api/admin/config', requireAdmin, async (req, res) => {
   try {
-    const { coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent } = req.body;
+    const { coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate } = req.body;
     await pool.query(
       `UPDATE config SET
         coin_per_ad = COALESCE($1, coin_per_ad),
         coin_to_inr = COALESCE($2, coin_to_inr),
         min_withdraw_inr = COALESCE($3, min_withdraw_inr),
         daily_free_limit = COALESCE($4, daily_free_limit),
-        user_share_percent = COALESCE($5, user_share_percent)
+        user_share_percent = COALESCE($5, user_share_percent),
+        cpa_user_share_percent = COALESCE($6, cpa_user_share_percent),
+        usd_to_inr_rate = COALESCE($7, usd_to_inr_rate)
       WHERE id = 1`,
-      [coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent]
+      [coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate]
     );
     res.json(await getConfig());
   } catch (err) {

@@ -51,7 +51,6 @@
   .auth-switch a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
   /* ---------- app shell (hidden until logged in) ---------- */
   #app{ display:none; }
-
   header.topbar{ position:sticky; top:0; z-index:20; background:var(--surface); border-bottom:1px solid var(--line); }
   .topbar-inner{ display:flex; align-items:center; justify-content:space-between; padding:16px 24px; }
   .logo{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem; }
@@ -109,12 +108,28 @@
   button:active{ transform:scale(0.96); }
   button:disabled{ opacity:0.45; cursor:not-allowed; }
   .btn-claim{ background:var(--primary); color:#ffffff; }
+  .btn-full.loading{ display:flex; align-items:center; justify-content:center; gap:10px; }
+  .spinner{
+    width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; flex-shrink:0;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
   .btn-claim:hover:not(:disabled){ opacity:0.9; }
   .btn-premium{ background:var(--indigo); color:#ffffff; }
   .btn-premium:hover{ opacity:0.9; }
   .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
   .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
   .btn-full{ width:100%; }
+  .spinner{
+    display:inline-block; width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; vertical-align:middle; margin-right:8px;
+  }
+  .spinner.dark{ border-color:rgba(15,107,92,0.25); border-top-color:var(--primary); }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .loading-block{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:48px 20px; color:var(--text-dim); font-size:0.9rem; }
+  .loading-block .spinner{ width:28px; height:28px; border-width:3px; margin-right:0; }
 
   .lock-card{ background:var(--surface); border:1px dashed var(--line); border-radius:var(--radius); padding:28px; text-align:center; }
   .lock-card .icon{ font-size:2rem; margin-bottom:10px; }
@@ -249,6 +264,20 @@
         <div class="stat"><div class="num mono" id="statINR">₹0.00</div><div class="lab">Wallet value</div></div>
         <div class="stat"><div class="num mono" id="statRank">Not ranked</div><div class="lab">Today's leaderboard</div></div>
       </div>
+
+      <div class="status-card" style="margin-top:16px;">
+        <div class="status-top">
+          <div><div style="font-weight:700; font-size:1.05rem;">Invite friends, earn bonus coins</div></div>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:12px;">
+          Share your code — when a friend signs up and verifies their email, you both get <span id="referralBonusText">50</span> bonus coins.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <div class="mono" id="referralCodeText" style="flex:1; background:var(--surface-alt); border:1px solid var(--line); border-radius:8px; padding:10px 14px; font-weight:700; font-size:1.05rem; letter-spacing:0.05em;">—</div>
+          <button class="btn-claim" id="copyReferralBtn" style="flex-shrink:0;">Copy Link</button>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Friends referred so far: <span id="referralCountText">0</span></p>
+      </div>
     </section>
 
     <section id="page-ads" class="page">
@@ -282,10 +311,9 @@
         <p>Higher-paying tasks — sign up for an app, try a service, complete a survey. Pays much more than watching an ad.</p>
       </div>
       <div id="tasksWallWrap">
-        <div class="lock-card">
-          <div class="icon">⏳</div>
-          <h3>Loading tasks…</h3>
-          <p>If this doesn't load, tasks may not be set up yet.</p>
+        <div class="loading-block">
+          <span class="spinner dark"></span>
+          <span>Loading tasks…</span>
         </div>
       </div>
     </section>
@@ -399,11 +427,13 @@
     const btn = el('authSubmitBtn');
     const originalLabel = btn.textContent;
     btn.disabled = true;
-    btn.textContent = 'Connecting…';
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="spinner"></span> Connecting…';
 
     try {
       if (isSignupMode) {
-        const data = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ name, email, password }) });
+        const refCode = new URLSearchParams(window.location.search).get('ref');
+        const data = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ name, email, password, ref: refCode }) });
         showOtpScreen(data.email || email);
       } else {
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
@@ -415,6 +445,7 @@
       el('authError').textContent = err.message;
     } finally {
       btn.disabled = false;
+      btn.classList.remove('loading');
       btn.textContent = originalLabel;
     }
   });
@@ -422,12 +453,21 @@
   el('otpSubmitBtn').addEventListener('click', async () => {
     const otp = el('otpInput').value.trim();
     el('otpError').textContent = '';
+    const btn = el('otpSubmitBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="spinner"></span> Verifying…';
     try {
       const data = await api('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail, otp }) });
       authToken = data.token;
       await enterApp(data.user.name);
     } catch (err) {
       el('otpError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = originalLabel;
     }
   });
 
@@ -606,6 +646,26 @@
     renderPlanUI();
   }
 
+  async function loadReferralInfo() {
+    try {
+      const data = await api('/referral/me');
+      el('referralCodeText').textContent = data.referralCode || '—';
+      el('referralCountText').textContent = data.referredCount;
+      el('referralBonusText').textContent = data.bonusPerReferral;
+    } catch (err) { /* fails quietly — non-critical widget */ }
+  }
+  el('copyReferralBtn').addEventListener('click', async () => {
+    const code = el('referralCodeText').textContent;
+    if (code === '—') return;
+    const link = `${window.location.origin}/earny-day.html?ref=${code}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Referral link copied!');
+    } catch (err) {
+      showToast('Could not copy — long-press to copy manually: ' + link);
+    }
+  });
+
   async function loadHistory() {
     const rows = await api('/wallet/history');
     const body = el('historyBody');
@@ -738,8 +798,11 @@
     await refreshWalletStats();
     await loadQueue();
     await loadHistory();
+    await loadReferralInfo();
   }
 </script>
 
 </body>
 </html>
+  
+  

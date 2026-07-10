@@ -39,6 +39,9 @@ async function initDb() {
       total_earned INTEGER NOT NULL DEFAULT 0,
       ads_watched_today INTEGER NOT NULL DEFAULT 0,
       last_active_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      referral_code TEXT UNIQUE,
+      referred_by INTEGER,
+      referral_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE TABLE IF NOT EXISTS ad_claims (
@@ -79,6 +82,10 @@ async function initDb() {
   await pool.query(`
     ALTER TABLE config ADD COLUMN IF NOT EXISTS cpa_user_share_percent INTEGER NOT NULL DEFAULT 75;
     ALTER TABLE config ADD COLUMN IF NOT EXISTS usd_to_inr_rate NUMERIC NOT NULL DEFAULT 85;
+    ALTER TABLE config ADD COLUMN IF NOT EXISTS referral_bonus_coins INTEGER NOT NULL DEFAULT 50;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by INTEGER;
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE;
   `);
   const { rows } = await pool.query('SELECT * FROM config WHERE id = 1');
   if (rows.length === 0) {
@@ -108,7 +115,67 @@ async function sendOtpEmail(toEmail, otp) {
       sender: { name: 'Earny Day', email: process.env.SMTP_FROM },
       to: [{ email: toEmail }],
       subject: 'Your Earny Day verification code',
-      htmlContent: `<p>Your verification code is <b style="font-size:20px;">${otp}</b>.</p><p>It expires in 10 minutes.</p>`,
+      htmlContent: `
+<!DOCTYPE html>
+<html>
+<body style="margin:0; padding:0; background-color:#f1f3f6;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f3f6; padding:32px 16px;">
+    <tr>
+      <td align="center">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:420px; background-color:#ffffff; border-radius:16px; overflow:hidden; border:1px solid #e3e6ec;">
+
+          <tr>
+            <td style="background-color:#0f6b5c; padding:28px 32px;">
+              <table role="presentation" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="width:32px; height:32px; background-color:#ffffff; border-radius:9px; text-align:center; font-size:18px; line-height:32px;">💰</td>
+                  <td style="padding-left:12px; color:#ffffff; font-size:20px; font-weight:700; font-family:Arial,sans-serif;">Earny Day</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:36px 32px 8px;">
+              <p style="margin:0 0 6px; font-family:Arial,sans-serif; font-size:22px; font-weight:700; color:#101828;">Verify your email</p>
+              <p style="margin:0; font-family:Arial,sans-serif; font-size:14px; color:#667085; line-height:1.6;">
+                Enter this code in the app to activate your account. It expires in <b>10 minutes</b>.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:24px 32px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f3f6; border-radius:12px;">
+                <tr>
+                  <td align="center" style="padding:22px 16px;">
+                    <span style="font-family:'Courier New',Courier,monospace; font-size:36px; font-weight:700; letter-spacing:10px; color:#0f6b5c;">${otp}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 32px 32px;">
+              <p style="margin:0; font-family:Arial,sans-serif; font-size:12px; color:#98a2b3; line-height:1.6;">
+                Didn't request this? You can safely ignore this email — your account is still secure.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#f7f8fa; padding:18px 32px; border-top:1px solid #e3e6ec;">
+              <p style="margin:0; font-family:Arial,sans-serif; font-size:12px; color:#98a2b3; text-align:center;">Earny Day — Watch. Earn. Daily.</p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`,
     }),
   });
   if (!res.ok) {
@@ -154,13 +221,20 @@ app.get('/api/health', (req, res) => res.json({ ok: true }));
 // ---------- AUTH ROUTES ----------
 app.post('/api/auth/signup', async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const { name, email, password, ref } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: 'name, email and password are required' });
     if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
 
     const existingRes = await pool.query('SELECT id, is_verified FROM users WHERE email = $1', [email.toLowerCase()]);
     const existing = existingRes.rows[0];
     if (existing && existing.is_verified) return res.status(409).json({ error: 'Email already registered' });
+
+    // resolve referral code to a referrer's user id, if provided and valid
+    let referrerId = null;
+    if (ref) {
+      const refRes = await pool.query('SELECT id FROM users WHERE referral_code = $1', [ref.toUpperCase()]);
+      if (refRes.rows[0]) referrerId = refRes.rows[0].id;
+    }
 
     const hash = bcrypt.hashSync(password, 10);
     let userId;
@@ -169,10 +243,13 @@ app.post('/api/auth/signup', async (req, res) => {
       userId = existing.id;
     } else {
       const insertRes = await pool.query(
-        'INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id',
-        [name, email.toLowerCase(), hash]
+        'INSERT INTO users (name, email, password_hash, referred_by) VALUES ($1, $2, $3, $4) RETURNING id',
+        [name, email.toLowerCase(), hash, referrerId]
       );
       userId = insertRes.rows[0].id;
+      // referral_code is derived from the new user's own id — guaranteed unique, no collision handling needed
+      const code = 'EARN' + userId.toString(36).toUpperCase();
+      await pool.query('UPDATE users SET referral_code = $1 WHERE id = $2', [code, userId]);
     }
     const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
     const user = userRes.rows[0];
@@ -201,6 +278,15 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     if (!bcrypt.compareSync(otp, user.otp_hash)) return res.status(400).json({ error: 'Incorrect code' });
 
     await pool.query('UPDATE users SET is_verified = TRUE, otp_hash = NULL, otp_expires_at = NULL WHERE id = $1', [user.id]);
+
+    // referral bonus — pays out once, only when the referred user successfully verifies
+    if (user.referred_by && !user.referral_bonus_paid) {
+      const cfg = await getConfig();
+      const bonus = cfg.referral_bonus_coins;
+      await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [bonus, user.referred_by]);
+      await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1, referral_bonus_paid = TRUE WHERE id = $2', [bonus, user.id]);
+    }
+
     res.json({ token: signToken(user.id), user: { id: user.id, name: user.name, email: user.email } });
   } catch (err) {
     console.error(err);
@@ -240,6 +326,24 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Login failed. Please try again.' });
+  }
+});
+
+// ---------- REFERRALS ----------
+app.get('/api/referral/me', requireAuth, async (req, res) => {
+  try {
+    const userRes = await pool.query('SELECT referral_code FROM users WHERE id = $1', [req.userId]);
+    const referralCode = userRes.rows[0].referral_code;
+    const countRes = await pool.query('SELECT COUNT(*) AS c FROM users WHERE referred_by = $1 AND is_verified = TRUE', [req.userId]);
+    const cfg = await getConfig();
+    res.json({
+      referralCode,
+      referredCount: parseInt(countRes.rows[0].c, 10),
+      bonusPerReferral: cfg.referral_bonus_coins,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load referral info.' });
   }
 });
 
@@ -522,7 +626,7 @@ app.get('/api/admin/config', requireAdmin, async (req, res) => {
 });
 app.post('/api/admin/config', requireAdmin, async (req, res) => {
   try {
-    const { coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate } = req.body;
+    const { coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate, referral_bonus_coins } = req.body;
     await pool.query(
       `UPDATE config SET
         coin_per_ad = COALESCE($1, coin_per_ad),
@@ -531,9 +635,10 @@ app.post('/api/admin/config', requireAdmin, async (req, res) => {
         daily_free_limit = COALESCE($4, daily_free_limit),
         user_share_percent = COALESCE($5, user_share_percent),
         cpa_user_share_percent = COALESCE($6, cpa_user_share_percent),
-        usd_to_inr_rate = COALESCE($7, usd_to_inr_rate)
+        usd_to_inr_rate = COALESCE($7, usd_to_inr_rate),
+        referral_bonus_coins = COALESCE($8, referral_bonus_coins)
       WHERE id = 1`,
-      [coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate]
+      [coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate, referral_bonus_coins]
     );
     res.json(await getConfig());
   } catch (err) {

@@ -68,7 +68,6 @@
   .tab-btn{ flex:1; background:none; border:none; padding:12px 4px 10px; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-dim); font-size:0.68rem; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif; }
   .tab-btn .ic{ font-size:1.1rem; }
   .tab-btn.active{ color:var(--primary); }
-
   .page{ display:none; padding:32px 0 20px; animation:fadeIn .25s ease; }
   .page.active{ display:block; }
   @keyframes fadeIn{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
@@ -198,8 +197,7 @@
       <input type="password" id="passwordInput" placeholder="••••••••">
       <button type="button" class="pw-toggle" id="pwToggleBtn">Show</button>
     </div>
-
-    <button class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
+    utton class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
 
     <div class="auth-switch">
       <span id="authSwitchText">Don't have an account?</span>
@@ -364,7 +362,7 @@
   const el = (id) => document.getElementById(id);
   // Same-origin path — works because this file is now served by the same backend.
   let API_BASE = '/api';
-  let authToken = null;     // kept in memory only — see README for production session storage advice
+  let authToken = localStorage.getItem('earnyday_token') || null;
   let isSignupMode = false;
   let queueState = [];      // client-side visual queue; server is the source of truth for limits
   let idCounter = 0;
@@ -442,6 +440,7 @@
         const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
         if (data.needsVerification) { showOtpScreen(email); return; }
         authToken = data.token;
+        localStorage.setItem('earnyday_token', authToken);
         await enterApp(data.user.name);
       }
     } catch (err) {
@@ -464,6 +463,7 @@
     try {
       const data = await api('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail, otp }) });
       authToken = data.token;
+      localStorage.setItem('earnyday_token', authToken);
       await enterApp(data.user.name);
     } catch (err) {
       el('otpError').textContent = err.message;
@@ -514,6 +514,7 @@
 
   el('logoutBtn').addEventListener('click', () => {
     authToken = null;
+    localStorage.removeItem('earnyday_token');
     el('app').style.display = 'none';
     showAuthScreen();
   });
@@ -803,9 +804,24 @@
     await loadHistory();
     await loadReferralInfo();
   }
+
+  // ---------- auto-login on page load if a saved session exists ----------
+  (async function initSession() {
+    if (!authToken) return; // no saved token — show login screen as normal
+    try {
+      const me = await api('/wallet/me'); // validates the token against the backend
+      el('welcomeName').textContent = 'Welcome, ' + me.name;
+      el('authScreen').style.display = 'none';
+      el('app').style.display = 'block';
+      await refreshEverything();
+    } catch (err) {
+      // token expired or invalid — clear it and fall back to the login screen
+      authToken = null;
+      localStorage.removeItem('earnyday_token');
+    }
+  })();
 </script>
 
 </body>
 </html>
-  
   

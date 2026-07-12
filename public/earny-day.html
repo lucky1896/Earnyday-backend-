@@ -7,9 +7,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
-  <script>
-  if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js'); }
-  </script>
 <style>
   :root{
     --bg:#f7f8fa; --surface:#ffffff; --surface-alt:#f1f3f6; --line:#e3e6ec;
@@ -54,6 +51,7 @@
   .auth-switch a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
   /* ---------- app shell (hidden until logged in) ---------- */
   #app{ display:none; }
+
   header.topbar{ position:sticky; top:0; z-index:20; background:var(--surface); border-bottom:1px solid var(--line); }
   .topbar-inner{ display:flex; align-items:center; justify-content:space-between; padding:16px 24px; }
   .logo{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem; }
@@ -68,6 +66,7 @@
   .tab-btn{ flex:1; background:none; border:none; padding:12px 4px 10px; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-dim); font-size:0.68rem; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif; }
   .tab-btn .ic{ font-size:1.1rem; }
   .tab-btn.active{ color:var(--primary); }
+
   .page{ display:none; padding:32px 0 20px; animation:fadeIn .25s ease; }
   .page.active{ display:block; }
   @keyframes fadeIn{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
@@ -111,6 +110,18 @@
   button:disabled{ opacity:0.45; cursor:not-allowed; }
   .btn-claim{ background:var(--primary); color:#ffffff; }
   .btn-full.loading{ display:flex; align-items:center; justify-content:center; gap:10px; }
+  .spinner{
+    width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; flex-shrink:0;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .btn-claim:hover:not(:disabled){ opacity:0.9; }
+  .btn-premium{ background:var(--indigo); color:#ffffff; }
+  .btn-premium:hover{ opacity:0.9; }
+  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
+  .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
+  .btn-full{ width:100%; }
   .spinner{
     width:16px; height:16px; border-radius:50%;
     border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
@@ -197,7 +208,8 @@
       <input type="password" id="passwordInput" placeholder="••••••••">
       <button type="button" class="pw-toggle" id="pwToggleBtn">Show</button>
     </div>
-    utton class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
+
+    <button class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
 
     <div class="auth-switch">
       <span id="authSwitchText">Don't have an account?</span>
@@ -368,7 +380,6 @@
   let idCounter = 0;
 
   const AD_META_FALLBACK = "Video · 5s";
-
   // ---------- API helper ----------
   async function api(path, options = {}) {
     const res = await fetch(API_BASE + path, {
@@ -529,6 +540,7 @@
       if (btn.dataset.page === 'leaderboard') loadLeaderboard();
       if (btn.dataset.page === 'tasks') loadTasksWall();
       if (btn.dataset.page === 'wallet') loadHistory();
+      if (btn.dataset.page === 'ads') loadAdNetworkScript();
     });
   });
 
@@ -797,6 +809,16 @@
     setTimeout(() => t.classList.remove('show'), 2400);
   }
 
+  // ---------- real ad network (loads only when user opens the Ads tab — never on login/signup) ----------
+  let adNetworkLoaded = false;
+  function loadAdNetworkScript() {
+    if (adNetworkLoaded) return;
+    adNetworkLoaded = true;
+    (function(s){s.dataset.zone='11270018',s.src='https://al5sm.com/tag.min.js'})(
+      [document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script'))
+    );
+  }
+
   // ---------- init after login ----------
   async function refreshEverything() {
     await refreshWalletStats();
@@ -824,4 +846,3 @@
 
 </body>
 </html>
-  

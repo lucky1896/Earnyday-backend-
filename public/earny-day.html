@@ -123,18 +123,6 @@
   .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
   .btn-full{ width:100%; }
   .spinner{
-    width:16px; height:16px; border-radius:50%;
-    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
-    animation:spin 0.7s linear infinite; flex-shrink:0;
-  }
-  @keyframes spin{ to{ transform:rotate(360deg); } }
-  .btn-claim:hover:not(:disabled){ opacity:0.9; }
-  .btn-premium{ background:var(--indigo); color:#ffffff; }
-  .btn-premium:hover{ opacity:0.9; }
-  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
-  .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
-  .btn-full{ width:100%; }
-  .spinner{
     display:inline-block; width:16px; height:16px; border-radius:50%;
     border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
     animation:spin 0.7s linear infinite; vertical-align:middle; margin-right:8px;
@@ -171,6 +159,17 @@
   .lb-footnote{ color:var(--text-dim); font-size:0.85rem; text-align:center; margin-top:14px; padding:14px; border:1px dashed var(--line); border-radius:12px; }
 
   .plan-compare{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:20px; }
+  .earn-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; }
+  .earn-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; text-align:center; box-shadow:var(--shadow); }
+  .earn-ic{ font-size:1.6rem; margin-bottom:6px; }
+  .earn-title{ font-weight:600; font-size:0.9rem; margin-bottom:2px; }
+  .earn-sub{ color:var(--text-dim); font-size:0.76rem; margin-bottom:12px; min-height:2.2em; }
+  .badge-row{ display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; box-shadow:var(--shadow); }
+  .badge-row.locked{ opacity:0.55; }
+  .badge-ic{ font-size:1.5rem; }
+  .badge-info{ flex:1; }
+  .badge-info .bt{ font-weight:600; font-size:0.9rem; text-transform:capitalize; }
+  .badge-info .bs{ color:var(--text-dim); font-size:0.78rem; }
   .plan-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow); }
   .plan-card.highlight{ border-color:var(--indigo); box-shadow:0 0 0 1px var(--indigo) inset; }
   .plan-card .ptitle{ font-size:1.1rem; font-weight:700; margin-bottom:4px; }
@@ -291,7 +290,64 @@
         </div>
         <p style="color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Friends referred so far: <span id="referralCountText">0</span></p>
       </div>
+
+      <div class="page-head" style="margin-top:28px;">
+        <h1 style="font-size:1.2rem;">More ways to earn</h1>
+      </div>
+
+      <div class="earn-grid">
+        <div class="earn-card">
+          <div class="earn-ic">📅</div>
+          <div class="earn-title">Daily Check-in</div>
+          <div class="earn-sub" id="checkinSub">Streak: 0 days</div>
+          <button class="btn-claim btn-full" id="checkinBtn">Check In</button>
+        </div>
+        <div class="earn-card">
+          <div class="earn-ic">🎡</div>
+          <div class="earn-title">Spin & Win</div>
+          <div class="earn-sub">One free spin daily</div>
+          <button class="btn-claim btn-full" id="spinBtn">Spin</button>
+        </div>
+        <div class="earn-card">
+          <div class="earn-ic">🎫</div>
+          <div class="earn-title">Scratch Card</div>
+      <button class="btn-claim btn-full" id="scratchBtn">Scratch</button>
+        </div>
+        <div class="earn-card" id="profileCard">
+          <div class="earn-ic">📝</div>
+          <div class="earn-title">Complete Profile</div>
+          <div class="earn-sub">One-time +30 coins</div>
+          <button class="btn-claim btn-full" id="profileBtn">Complete</button>
+        </div>
+      </div>
+
+      <div class="page-head" style="margin-top:24px;">
+        <h1 style="font-size:1.2rem;">Achievement Badges</h1>
+        <p>One-time bonuses as your total earnings grow.</p>
+      </div>
+      <div id="badgesList" class="queue"></div>
     </section>
+
+    <!-- profile completion modal -->
+    <div id="profileModalBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:60; align-items:center; justify-content:center; padding:20px;">
+      <div style="background:var(--surface); border-radius:16px; padding:26px; max-width:360px; width:100%;">
+        <h3 style="margin-bottom:4px;">Complete your profile</h3>
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:18px;">Earn +30 coins, one-time.</p>
+        <div class="field"><label>Date of birth</label><input type="date" id="dobInput"></div>
+        <div class="field">
+          <label>Gender</label>
+          <select id="genderInput" style="width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface-alt); font-size:0.92rem;">
+            <option value="">Select…</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="auth-error" id="profileError"></div>
+        <button class="btn-claim btn-full" id="profileSubmitBtn">Save & Claim</button>
+        <button class="btn-ghost btn-full" id="profileCancelBtn" style="margin-top:8px;">Cancel</button>
+      </div>
+    </div>
 
     <section id="page-ads" class="page">
       <div class="page-head">
@@ -380,6 +436,7 @@
   let idCounter = 0;
 
   const AD_META_FALLBACK = "Video · 5s";
+
   // ---------- API helper ----------
   async function api(path, options = {}) {
     const res = await fetch(API_BASE + path, {
@@ -520,6 +577,7 @@
     el('otpScreen').style.display = 'none';
     el('authScreen').style.display = 'none';
     el('app').style.display = 'block';
+    loadAdNetworkScript(); // safe to load now — user is authenticated and past signup/login
     await refreshEverything();
   }
 
@@ -649,6 +707,92 @@
   };
 
   // ---------- wallet + history ----------
+  // ---------- extra earning features ----------
+  async function loadEarnStatus() {
+    try {
+      const s = await api('/earn/status');
+      el('checkinBtn').disabled = !s.canCheckin;
+      el('checkinBtn').textContent = s.canCheckin ? 'Check In' : 'Done Today';
+      el('checkinSub').textContent = `Streak: ${s.checkinStreak} day${s.checkinStreak === 1 ? '' : 's'}`;
+
+      el('spinBtn').disabled = !s.canSpin;
+      el('spinBtn').textContent = s.canSpin ? 'Spin' : 'Done Today';
+
+      el('scratchBtn').disabled = !s.canScratch;
+      el('scratchBtn').textContent = s.canScratch ? 'Scratch' : 'Done Today';
+
+      const profileCard = el('profileCard');
+      if (s.profileBonusPaid) {
+        profileCard.querySelector('.earn-sub').textContent = 'Claimed ✓';
+        el('profileBtn').disabled = true;
+        el('profileBtn').textContent = 'Claimed';
+      }
+
+      const badgesList = el('badgesList');
+      badgesList.innerHTML = s.badges.map(b => `
+        <div class="badge-row ${b.unlocked ? '' : 'locked'}">
+          <div class="badge-ic">${b.claimed ? '✅' : b.unlocked ? '🏅' : '🔒'}</div>
+          <div class="badge-info">
+            <div class="bt">${b.key}</div>
+            <div class="bs">${b.threshold.toLocaleString('en-IN')} total coins needed · +${b.coins} reward</div>
+          </div>
+          ${b.claimed ? '' : b.unlocked ? `<button class="btn-claim" onclick="claimBadge('${b.key}')">Claim</button>` : ''}
+        </div>`).join('');
+    } catch (err) { /* silent — non-critical section */ }
+  }
+
+  el('checkinBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/checkin', { method: 'POST' });
+      showToast(`+${r.coinsAwarded} coins! Streak: ${r.streak} day${r.streak === 1 ? '' : 's'}`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  });
+
+  el('spinBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/spin', { method: 'POST' });
+      showToast(`🎡 You won +${r.coinsAwarded} coins!`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  });
+
+  el('scratchBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/scratch', { method: 'POST' });
+      showToast(`🎫 You scratched +${r.coinsAwarded} coins!`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  });
+
+  el('profileBtn').addEventListener('click', () => { el('profileModalBg').style.display = 'flex'; });
+  el('profileCancelBtn').addEventListener('click', () => { el('profileModalBg').style.display = 'none'; });
+  el('profileSubmitBtn').addEventListener('click', async () => {
+    const dob = el('dobInput').value;
+    const gender = el('genderInput').value;
+    el('profileError').textContent = '';
+    if (!dob || !gender) { el('profileError').textContent = 'Please fill in both fields.'; return; }
+    try {
+      const r = await api('/earn/complete-profile', { method: 'POST', body: JSON.stringify({ dob, gender }) });
+      el('profileModalBg').style.display = 'none';
+      showToast(`+${r.coinsAwarded} coins — profile completed!`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { el('profileError').textContent = err.message; }
+  });
+
+  window.claimBadge = async function (key) {
+    try {
+      const r = await api('/earn/claim-badge', { method: 'POST', body: JSON.stringify({ key }) });
+      showToast(`🏅 Badge claimed! +${r.coinsAwarded} coins`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  };
+
   async function refreshWalletStats() {
     const me = await api('/wallet/me');
     el('walletBalance').textContent = me.wallet_coins;
@@ -825,6 +969,7 @@
     await loadQueue();
     await loadHistory();
     await loadReferralInfo();
+    await loadEarnStatus();
   }
 
   // ---------- auto-login on page load if a saved session exists ----------
@@ -835,6 +980,7 @@
       el('welcomeName').textContent = 'Welcome, ' + me.name;
       el('authScreen').style.display = 'none';
       el('app').style.display = 'block';
+      loadAdNetworkScript();
       await refreshEverything();
     } catch (err) {
       // token expired or invalid — clear it and fall back to the login screen

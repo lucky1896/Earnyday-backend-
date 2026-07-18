@@ -9,12 +9,12 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <style>
   :root{
-    --bg:#f7f8fa; --surface:#ffffff; --surface-alt:#f1f3f6; --line:#e3e6ec;
-    --primary:#0f6b5c; --primary-soft:rgba(15,107,92,0.09);
-    --accent:#a8751f; --accent-soft:rgba(168,117,31,0.10);
-    --indigo:#4c4fe0; --indigo-soft:rgba(76,79,224,0.09);
-    --text:#101828; --text-dim:#667085; --radius:12px;
-    --shadow:0 1px 2px rgba(16,24,40,0.06);
+    --bg:#0e0d1a; --surface:#171529; --surface-alt:#1f1c35; --line:#2c2848;
+    --primary:#f5a623; --primary-soft:rgba(245,166,35,0.14);
+    --accent:#f5a623; --accent-soft:rgba(245,166,35,0.14);
+    --indigo:#8b5cf6; --indigo-soft:rgba(139,92,246,0.16);
+    --text:#f2f0fa; --text-dim:#9691b8; --radius:14px;
+    --shadow:0 4px 14px rgba(0,0,0,0.35);
   }
   *{box-sizing:border-box; margin:0; padding:0;}
   body{ background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; line-height:1.5; min-height:100vh; padding-bottom:78px; }
@@ -108,7 +108,7 @@
   button{ font-family:'Inter',sans-serif; font-weight:600; cursor:pointer; border:none; border-radius:999px; padding:10px 20px; font-size:0.85rem; transition:transform .15s ease, opacity .15s ease; }
   button:active{ transform:scale(0.96); }
   button:disabled{ opacity:0.45; cursor:not-allowed; }
-  .btn-claim{ background:var(--primary); color:#ffffff; }
+  .btn-claim{ background:var(--primary); color:#1a1206; font-weight:700; }
   .btn-full.loading{ display:flex; align-items:center; justify-content:center; gap:10px; }
   .spinner{
     width:16px; height:16px; border-radius:50%;
@@ -160,6 +160,33 @@
 
   .plan-compare{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:20px; }
   .earn-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; }
+  .wallet-hero{
+    background:linear-gradient(135deg, #241f42, #1a1730);
+    border:1px solid var(--line); border-radius:20px; padding:24px; margin-bottom:16px;
+    position:relative; overflow:hidden;
+  }
+  .wallet-hero::after{ content:"💰"; position:absolute; right:-10px; top:-10px; font-size:5rem; opacity:0.08; }
+  .wallet-hero .wh-label{ color:var(--text-dim); font-size:0.82rem; }
+  .wallet-hero .wh-amt{ font-size:2.1rem; font-weight:800; color:var(--primary); margin:4px 0 14px; }
+  .wallet-hero .wh-row{ display:flex; gap:24px; }
+  .wallet-hero .wh-item .l{ color:var(--text-dim); font-size:0.72rem; }
+  .wallet-hero .wh-item .v{ font-weight:700; font-size:0.95rem; }
+  .premium-banner{
+    background:linear-gradient(135deg, var(--indigo), #6d28d9);
+    border-radius:16px; padding:18px 20px; margin-bottom:20px; display:flex; align-items:center; gap:14px;
+    cursor:pointer;
+  }
+  .premium-banner .pb-ic{ font-size:1.8rem; }
+  .premium-banner .pb-title{ font-weight:700; color:#fff; font-size:0.95rem; }
+  .premium-banner .pb-sub{ color:rgba(255,255,255,0.75); font-size:0.78rem; }
+  .qa-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:24px; }
+  .qa-item{
+    background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 8px;
+    text-align:center; cursor:pointer; transition:transform .1s ease;
+  }
+  .qa-item:active{ transform:scale(0.95); }
+  .qa-item .qa-ic{ font-size:1.5rem; margin-bottom:6px; }
+  .qa-item .qa-label{ font-size:0.74rem; font-weight:600; color:var(--text); }
   .earn-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; text-align:center; box-shadow:var(--shadow); }
   .earn-ic{ font-size:1.6rem; margin-bottom:6px; }
   .earn-title{ font-weight:600; font-size:0.9rem; margin-bottom:2px; }
@@ -170,6 +197,15 @@
   .badge-info{ flex:1; }
   .badge-info .bt{ font-weight:600; font-size:0.9rem; text-transform:capitalize; }
   .badge-info .bs{ color:var(--text-dim); font-size:0.78rem; }
+  .checkin-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+  .checkin-row{ display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+  .checkin-day{ background:var(--surface-alt); border:1px solid var(--line); border-radius:10px; padding:10px 4px; text-align:center; }
+  .checkin-day .cd-label{ font-size:0.7rem; color:var(--text-dim); margin-bottom:4px; }
+  .checkin-day .cd-ic{ font-size:1.1rem; }
+  .checkin-day .cd-coin{ font-size:0.72rem; font-weight:600; margin-top:2px; }
+  .checkin-day.done{ border-color:var(--primary); background:var(--primary-soft); }
+  .checkin-day.today{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .checkin-day.locked{ opacity:0.5; }
   .plan-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow); }
   .plan-card.highlight{ border-color:var(--indigo); box-shadow:0 0 0 1px var(--indigo) inset; }
   .plan-card .ptitle{ font-size:1.1rem; font-weight:700; margin-bottom:4px; }
@@ -261,57 +297,66 @@
         <p>Here's your activity for today.</p>
       </div>
 
-      <div class="status-card">
-        <div class="status-top">
-          <div><div style="font-weight:700; font-size:1.05rem;">Daily ad usage</div></div>
-          <span class="plan-badge free" id="planBadge">Free Plan</span>
+      <div class="wallet-hero">
+        <div class="wh-label">Total Balance</div>
+        <div class="wh-amt mono" id="heroWalletInr">₹0.00</div>
+        <div class="wh-row">
+          <div class="wh-item"><div class="l">Coins</div><div class="v mono" id="heroCoins">0</div></div>
+          <div class="wh-item"><div class="l">Total Earned</div><div class="v mono" id="heroAdsWatched">0</div></div>
+          <div class="wh-item"><div class="l">Rank</div><div class="v mono" id="heroRank">—</div></div>
         </div>
-        <div class="usage-label"><span id="usageLabel">0 / 150 ads watched today</span></div>
-        <div class="usage-bar"><div class="usage-fill" id="usageFill" style="width:0%;"></div></div>
+      </div>
+
+      <div class="qa-grid">
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=tasks]').click()">
+          <div class="qa-ic">🎯</div><div class="qa-label">Surveys</div>
+        </div>
+        <div class="qa-item" onclick="document.getElementById('checkinBtn').scrollIntoView({behavior:'smooth', block:'center'})">
+          <div class="qa-ic">📅</div><div class="qa-label">Daily Check-in</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=tasks]').click()">
+          <div class="qa-ic">📋</div><div class="qa-label">Tasks</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=refer]').click()">
+          <div class="qa-ic">🎁</div><div class="qa-label">Refer & Earn</div>
+        </div>
+        <div class="qa-item" onclick="document.getElementById('spinCanvas') ? document.getElementById('spinCanvas').scrollIntoView({behavior:'smooth', block:'center'}) : null">
+          <div class="qa-ic">🎡</div><div class="qa-label">Spin & Win</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=more]').click()">
+          <div class="qa-ic">🏆</div><div class="qa-label">Leaderboard</div>
+        </div>
       </div>
 
       <div class="stat-grid">
         <div class="stat you"><div class="num mono" id="statEarned">0</div><div class="lab">Coins earned (all time)</div></div>
-        <div class="stat"><div class="num mono" id="statAdsWatched">0</div><div class="lab">Ads watched today</div></div>
         <div class="stat"><div class="num mono" id="statINR">₹0.00</div><div class="lab">Wallet value</div></div>
         <div class="stat"><div class="num mono" id="statRank">Not ranked</div><div class="lab">Today's leaderboard</div></div>
-      </div>
-
-      <div class="status-card" style="margin-top:16px;">
-        <div class="status-top">
-          <div><div style="font-weight:700; font-size:1.05rem;">Invite friends, earn bonus coins</div></div>
-        </div>
-        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:12px;">
-          Share your code — when a friend signs up and verifies their email, you both get <span id="referralBonusText">50</span> bonus coins.
-        </p>
-        <div style="display:flex; gap:10px; align-items:center;">
-          <div class="mono" id="referralCodeText" style="flex:1; background:var(--surface-alt); border:1px solid var(--line); border-radius:8px; padding:10px 14px; font-weight:700; font-size:1.05rem; letter-spacing:0.05em;">—</div>
-          <button class="btn-claim" id="copyReferralBtn" style="flex-shrink:0;">Copy Link</button>
-        </div>
-        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Friends referred so far: <span id="referralCountText">0</span></p>
       </div>
 
       <div class="page-head" style="margin-top:28px;">
         <h1 style="font-size:1.2rem;">More ways to earn</h1>
       </div>
 
-      <div class="earn-grid">
+      <div class="checkin-card">
+        <div class="earn-title" style="margin-bottom:10px;">📅 Daily Check-in</div>
+        <div class="checkin-row" id="checkinRow"></div>
+        <button class="btn-claim btn-full" id="checkinBtn" style="margin-top:14px;">Check In</button>
+      </div>
+
+      <div class="earn-grid" style="margin-top:14px;">
         <div class="earn-card">
-          <div class="earn-ic">📅</div>
-          <div class="earn-title">Daily Check-in</div>
-          <div class="earn-sub" id="checkinSub">Streak: 0 days</div>
-          <button class="btn-claim btn-full" id="checkinBtn">Check In</button>
+          <div class="earn-title" style="margin-bottom:8px;">🎡 Spin & Win</div>
+          <canvas id="spinCanvas" width="220" height="220" style="max-width:100%; margin:0 auto; display:block;"></canvas>
+          <button class="btn-claim btn-full" id="spinBtn" style="margin-top:12px;">Spin</button>
         </div>
         <div class="earn-card">
-          <div class="earn-ic">🎡</div>
-          <div class="earn-title">Spin & Win</div>
-          <div class="earn-sub">One free spin daily</div>
-          <button class="btn-claim btn-full" id="spinBtn">Spin</button>
-        </div>
-        <div class="earn-card">
-          <div class="earn-ic">🎫</div>
-          <div class="earn-title">Scratch Card</div>
-      <button class="btn-claim btn-full" id="scratchBtn">Scratch</button>
+          <div class="earn-title" style="margin-bottom:8px;">🎫 Scratch Card</div>
+          <div style="position:relative; width:100%; max-width:220px; height:120px; margin:0 auto;">
+            <div id="scratchPrize" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.3rem; color:var(--accent); background:var(--surface-alt); border-radius:10px;">Tap Scratch</div>
+            <canvas id="scratchCanvas" width="220" height="120" style="position:absolute; inset:0; border-radius:10px; touch-action:none;"></canvas>
+          </div>
+          <button class="btn-claim btn-full" id="scratchBtn" style="margin-top:12px;">New Scratch Card</button>
         </div>
         <div class="earn-card" id="profileCard">
           <div class="earn-ic">📝</div>
@@ -349,14 +394,6 @@
       </div>
     </div>
 
-    <section id="page-ads" class="page">
-      <div class="page-head">
-        <h1>Ad Queue</h1>
-        <p>Ads run one after another. Each one needs a quick tap to confirm you're watching.</p>
-      </div>
-      <div class="queue" id="queue"></div>
-    </section>
-
     <section id="page-wallet" class="page">
       <div class="page-head"><h1>Wallet</h1><p>Your balance, conversion rate, and withdrawal.</p></div>
       <div class="withdraw-card">
@@ -387,39 +424,65 @@
       </div>
     </section>
 
-    <section id="page-leaderboard" class="page">
-      <div class="page-head"><h1>Leaderboard</h1><p>Today's top 10 earners only.</p></div>
-      <div id="leaderboardList"></div>
-      <div id="leaderboardFootnote" class="lb-footnote" style="display:none;"></div>
+    <section id="page-refer" class="page">
+      <div class="page-head"><h1>Refer & Earn</h1><p>Invite friends and earn bonus coins together.</p></div>
+      <div class="status-card">
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:12px;">
+          Share your code — when a friend signs up and verifies their email, you both get <span id="referralBonusText">50</span> bonus coins.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <div class="mono" id="referralCodeText" style="flex:1; background:var(--surface-alt); border:1px solid var(--line); border-radius:8px; padding:12px 14px; font-weight:700; font-size:1.15rem; letter-spacing:0.05em; text-align:center;">—</div>
+          <button class="btn-claim" id="copyReferralBtn" style="flex-shrink:0;">Copy Link</button>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:14px;">Friends referred so far: <b id="referralCountText" style="color:var(--text);">0</b></p>
+      </div>
+      <div class="note">Share your code on WhatsApp, Telegram, or anywhere — anyone who signs up with it counts toward your referral bonus.</div>
     </section>
 
-    <section id="page-premium" class="page">
-      <div class="page-head"><h1>Premium</h1><p>Remove your daily ad limit and earn without a cap.</p></div>
+    <section id="page-more" class="page">
+      <div class="page-head"><h1>More</h1></div>
+
+      <div class="premium-banner" onclick="document.getElementById('premiumSection').scrollIntoView({behavior:'smooth'})">
+        <div class="pb-ic">👑</div>
+        <div style="flex:1;">
+          <div class="pb-title">Go Premium</div>
+          <div class="pb-sub">2x rewards · Priority payouts</div>
+        </div>
+        <div style="color:#fff; font-size:1.2rem;">›</div>
+      </div>
+
+      <div class="page-head" style="margin-top:20px;"><h1 style="font-size:1.1rem;">Leaderboard</h1><p>Today's top 10 earners.</p></div>
+      <div id="leaderboardList"></div>
+      <div id="leaderboardFootnote" class="lb-footnote" style="display:none;"></div>
+
+      <div class="page-head" style="margin-top:28px;" id="premiumSection"><h1 style="font-size:1.1rem;">Premium</h1></div>
       <div class="plan-compare">
         <div class="plan-card" id="freeCard">
           <div class="ptitle">Free</div><div class="pprice">₹0 / month</div>
-          <ul><li>Up to 150 ads per day</li><li>Standard payout speed</li><li>Leaderboard access</li></ul>
+          <ul><li>Standard rewards</li><li>Standard payout speed</li><li>Leaderboard access</li></ul>
           <button class="btn-ghost" id="currentPlanBtnFree" disabled>Current Plan</button>
         </div>
         <div class="plan-card highlight" id="premiumCard">
           <div class="ptitle">Premium</div><div class="pprice">₹99 / month</div>
-          <ul><li>Unlimited ads per day</li><li>Priority payout</li><li>Premium badge on leaderboard</li></ul>
+          <ul><li>2x rewards on tasks, spin & scratch</li><li>Priority payout</li><li>Premium badge on leaderboard</li></ul>
           <button class="btn-premium" id="upgradeBtn">Upgrade to Premium</button>
         </div>
       </div>
       <div class="note">Payment is processed by Razorpay. In test mode, use Razorpay's test card numbers — no real money moves until you switch to live keys.</div>
+
+      <div class="page-head" style="margin-top:28px;"><h1 style="font-size:1.1rem;">Account</h1></div>
+      <button class="btn-ghost btn-full" id="moreLogoutBtn">Log out</button>
     </section>
 
   </main>
 
   <nav class="tabbar">
     <div class="tabbar-inner">
-      <button class="tab-btn active" data-page="dashboard"><span class="ic">🏠</span>Dashboard</button>
-      <button class="tab-btn" data-page="ads"><span class="ic">▶️</span>Ads</button>
+      <button class="tab-btn active" data-page="dashboard"><span class="ic">🏠</span>Home</button>
       <button class="tab-btn" data-page="tasks"><span class="ic">🎯</span>Tasks</button>
       <button class="tab-btn" data-page="wallet"><span class="ic">👛</span>Wallet</button>
-      <button class="tab-btn" data-page="leaderboard"><span class="ic">🏆</span>Leaders</button>
-      <button class="tab-btn" data-page="premium"><span class="ic">⭐</span>Premium</button>
+      <button class="tab-btn" data-page="refer"><span class="ic">🎁</span>Refer</button>
+      <button class="tab-btn" data-page="more"><span class="ic">⋯</span>More</button>
     </div>
   </nav>
 </div>
@@ -432,10 +495,7 @@
   let API_BASE = '/api';
   let authToken = localStorage.getItem('earnyday_token') || null;
   let isSignupMode = false;
-  let queueState = [];      // client-side visual queue; server is the source of truth for limits
-  let idCounter = 0;
-
-  const AD_META_FALLBACK = "Video · 5s";
+  let isPremium = false;
 
   // ---------- API helper ----------
   async function api(path, options = {}) {
@@ -577,16 +637,17 @@
     el('otpScreen').style.display = 'none';
     el('authScreen').style.display = 'none';
     el('app').style.display = 'block';
-    loadAdNetworkScript(); // safe to load now — user is authenticated and past signup/login
     await refreshEverything();
   }
 
-  el('logoutBtn').addEventListener('click', () => {
+  function doLogout() {
     authToken = null;
     localStorage.removeItem('earnyday_token');
     el('app').style.display = 'none';
     showAuthScreen();
-  });
+  }
+  el('logoutBtn').addEventListener('click', doLogout);
+  el('moreLogoutBtn').addEventListener('click', doLogout);
 
   // ---------- tab navigation ----------
   document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -595,131 +656,130 @@
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       el('page-' + btn.dataset.page).classList.add('active');
-      if (btn.dataset.page === 'leaderboard') loadLeaderboard();
+      if (btn.dataset.page === 'more') loadLeaderboard();
       if (btn.dataset.page === 'tasks') loadTasksWall();
       if (btn.dataset.page === 'wallet') loadHistory();
-      if (btn.dataset.page === 'ads') loadAdNetworkScript();
     });
   });
 
   window.goToPremium = function () {
-    document.querySelector('.tab-btn[data-page="premium"]').click();
-  };
-
-  // ---------- ad queue (server-validated) ----------
-  let serverState = { isPremium: false, adsWatchedToday: 0, dailyLimit: 150, atLimit: false, coinPerAd: 12, ads: [] };
-
-  async function loadQueue() {
-    serverState = await api('/ads/queue');
-    if (queueState.length === 0 && !serverState.atLimit) {
-      queueState = serverState.ads.slice(0, 4).map((a, i) => ({
-        ...a, id: idCounter++, status: i === 0 ? 'active' : 'pending', progress: 0,
-      }));
-    }
-    renderQueue();
-    renderPlanUI();
-    if (queueState.some(a => a.status === 'active')) startActiveTimer();
-  }
-
-  function renderQueue() {
-    const container = el('queue');
-    container.innerHTML = '';
-
-    if (serverState.atLimit) {
-      container.innerHTML = `
-        <div class="lock-card">
-          <div class="icon">🔒</div>
-          <h3>You've hit today's free limit</h3>
-          <p>Free accounts can watch up to ${serverState.dailyLimit} ads a day. Upgrade to Premium for unlimited ads, or come back tomorrow.</p>
-          <button class="btn-premium" onclick="goToPremium()">See Premium</button>
-        </div>`;
-      return;
-    }
-
-    queueState.forEach(ad => {
-      const card = document.createElement('div');
-      card.className = 'ad-card' + (ad.status === 'active' ? ' active' : '') + (ad.status === 'done' ? ' done' : '');
-      card.innerHTML = `
-        <div class="ad-thumb">AD</div>
-        <div class="ad-info"><div class="name">${ad.name}</div><div class="meta">${ad.meta || AD_META_FALLBACK}</div></div>
-        <div class="ad-action" id="action-${ad.id}"></div>`;
-      container.appendChild(card);
-      renderAction(ad);
-    });
-  }
-
-  function renderAction(ad) {
-    const actionEl = el('action-' + ad.id);
-    if (!actionEl) return;
-    if (ad.status === 'done') {
-      actionEl.innerHTML = `<span style="color:var(--primary); font-size:0.85rem;">✓ Claimed</span>`;
-    } else if (ad.status === 'pending') {
-      actionEl.innerHTML = `<span style="color:var(--text-dim); font-size:0.8rem;">In queue</span>`;
-    } else if (ad.status === 'active') {
-      if (ad.progress < 100) {
-        actionEl.innerHTML = `<div class="ring" style="--p:${ad.progress}" data-t="${Math.ceil((100 - ad.progress) / 20)}s"></div>`;
-      } else {
-        actionEl.innerHTML = `<button class="btn-claim" onclick="claimAd(${ad.id})">Claim +${serverState.coinPerAd}</button>`;
-      }
-    }
-  }
-
-  function startActiveTimer() {
-    const active = queueState.find(a => a.status === 'active');
-    if (!active) return;
-    const interval = setInterval(() => {
-      active.progress += 4;
-      if (active.progress >= 100) { active.progress = 100; clearInterval(interval); }
-      renderAction(active);
-    }, 200);
-  }
-
-  window.claimAd = async function (id) {
-    const ad = queueState.find(a => a.id === id);
-    if (!ad || ad.status !== 'active') return;
-
-    try {
-      const result = await api('/ads/claim', { method: 'POST', body: JSON.stringify({ adName: ad.name }) });
-      ad.status = 'done';
-      showToast(`+${result.coinsAwarded} coins added to your wallet!`);
-
-      queueState = queueState.filter(a => a.id !== id);
-      const next = queueState.find(a => a.status === 'pending');
-
-      // refresh server truth (limit, wallet, ads watched) after each claim
-      serverState = await api('/ads/queue');
-
-      if (next && !serverState.atLimit) {
-        next.status = 'active';
-        const template = serverState.ads[queueState.length % serverState.ads.length];
-        queueState.push({ ...template, id: idCounter++, status: 'pending', progress: 0 });
-      }
-
-      await refreshWalletStats();
-      renderQueue();
-      if (next && !serverState.atLimit) startActiveTimer();
-    } catch (err) {
-      showToast(err.message);
-      serverState = await api('/ads/queue');
-      renderQueue();
-      renderPlanUI();
-    }
+    document.querySelector('.tab-btn[data-page="more"]').click();
+    setTimeout(() => document.getElementById('premiumSection').scrollIntoView({ behavior: 'smooth' }), 200);
   };
 
   // ---------- wallet + history ----------
   // ---------- extra earning features ----------
+  const SPIN_SEGMENTS = [2, 5, 10, 5, 20, 10, 50, 15]; // must visually match backend SPIN_REWARDS set
+  const SPIN_COLORS = ['#0f6b5c', '#4c4fe0', '#a8751f', '#0f6b5c', '#4c4fe0', '#a8751f', '#0f6b5c', '#4c4fe0'];
+  let spinRotation = 0;
+
+  function drawSpinWheel() {
+    const canvas = el('spinCanvas');
+    if (!canvas) return;
+     const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2, cy = canvas.height / 2, r = cx - 6;
+    const seg = (2 * Math.PI) / SPIN_SEGMENTS.length;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(spinRotation);
+    SPIN_SEGMENTS.forEach((val, i) => {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r, i * seg, (i + 1) * seg);
+      ctx.closePath();
+      ctx.fillStyle = SPIN_COLORS[i % SPIN_COLORS.length];
+      ctx.fill();
+      ctx.save();
+      ctx.rotate(i * seg + seg / 2);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 15px Inter, sans-serif';
+      ctx.fillText(val, r - 14, 5);
+      ctx.restore();
+    });
+    ctx.restore();
+    // pointer
+    ctx.beginPath();
+    ctx.moveTo(cx - 10, 4);
+    ctx.lineTo(cx + 10, 4);
+    ctx.lineTo(cx, 24);
+    ctx.closePath();
+    ctx.fillStyle = 'var(--text)'.startsWith('var') ? '#101828' : '#101828';
+    ctx.fill();
+  }
+
+  function drawScratchCanvas() {
+    const canvas = el('scratchCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#c7ccd6';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#8d93a8';
+    ctx.font = '13px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Scratch here ✦', canvas.width / 2, canvas.height / 2 + 4);
+  }
+
+  function setupScratchInteraction(onRevealed) {
+    const canvas = el('scratchCanvas');
+    const ctx = canvas.getContext('2d');
+    let scratching = false, revealed = false;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return { x: (p.clientX - rect.left) * (canvas.width / rect.width), y: (p.clientY - rect.top) * (canvas.height / rect.height) };
+    }
+    function scratchAt(x, y) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      ctx.arc(x, y, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    function checkRevealed() {
+      if (revealed) return;
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let cleared = 0;
+      for (let i = 3; i < data.length; i += 4 * 40) if (data[i] === 0) cleared++;
+      if (cleared / (data.length / (4 * 40)) > 0.45) { revealed = true; onRevealed(); }
+    }
+    const start = (e) => { scratching = true; const p = getPos(e); scratchAt(p.x, p.y); };
+    const move = (e) => { if (!scratching) return; e.preventDefault(); const p = getPos(e); scratchAt(p.x, p.y); checkRevealed(); };
+    const end = () => { scratching = false; };
+    canvas.onmousedown = start; canvas.onmousemove = move; canvas.onmouseup = end; canvas.onmouseleave = end;
+    canvas.ontouchstart = start; canvas.ontouchmove = move; canvas.ontouchend = end;
+  }
+
   async function loadEarnStatus() {
     try {
       const s = await api('/earn/status');
+
+      // check-in row (7 days)
+      const row = el('checkinRow');
+      const rewards = [5, 8, 10, 12, 15, 20, 40];
+      row.innerHTML = rewards.map((r, i) => {
+        const dayNum = i + 1;
+        const done = dayNum <= s.checkinStreak;
+        const isToday = dayNum === s.checkinStreak + 1 && s.canCheckin;
+        const cls = done ? 'done' : isToday ? 'today' : 'locked';
+        return `<div class="checkin-day ${cls}">
+          <div class="cd-label">Day ${dayNum}</div>
+          <div class="cd-ic">${done ? '✅' : isToday ? '🎁' : '🔒'}</div>
+          <div class="cd-coin">+${r}</div>
+        </div>`;
+      }).join('');
       el('checkinBtn').disabled = !s.canCheckin;
-      el('checkinBtn').textContent = s.canCheckin ? 'Check In' : 'Done Today';
-      el('checkinSub').textContent = `Streak: ${s.checkinStreak} day${s.checkinStreak === 1 ? '' : 's'}`;
+      el('checkinBtn').textContent = s.canCheckin ? 'Check In' : 'Come back tomorrow';
 
       el('spinBtn').disabled = !s.canSpin;
-      el('spinBtn').textContent = s.canSpin ? 'Spin' : 'Done Today';
+      el('spinBtn').textContent = s.canSpin ? 'Spin' : 'Come back tomorrow';
+      drawSpinWheel();
 
       el('scratchBtn').disabled = !s.canScratch;
-      el('scratchBtn').textContent = s.canScratch ? 'Scratch' : 'Done Today';
+      el('scratchBtn').textContent = s.canScratch ? 'New Scratch Card' : 'Come back tomorrow';
+      if (s.canScratch) { drawScratchCanvas(); el('scratchPrize').textContent = ''; }
+      else { el('scratchPrize').textContent = 'Come back tomorrow'; el('scratchCanvas').getContext('2d').clearRect(0,0,220,120); }
 
       const profileCard = el('profileCard');
       if (s.profileBonusPaid) {
@@ -750,21 +810,56 @@
     } catch (err) { showToast(err.message); }
   });
 
+  let spinning = false;
   el('spinBtn').addEventListener('click', async () => {
+    if (spinning) return;
+    spinning = true;
+    const originalLabel = el('spinBtn').textContent;
+    el('spinBtn').disabled = true;
     try {
       const r = await api('/earn/spin', { method: 'POST' });
-      showToast(`🎡 You won +${r.coinsAwarded} coins!`);
-      await refreshWalletStats();
-      await loadEarnStatus();
-    } catch (err) { showToast(err.message); }
+      // find a segment matching the (pre-premium-multiplier) reward — fall back to random if not found
+      const baseCoins = isPremium ? r.coinsAwarded / 2 : r.coinsAwarded;
+      let idx = SPIN_SEGMENTS.indexOf(baseCoins);
+      if (idx === -1) idx = Math.floor(Math.random() * SPIN_SEGMENTS.length);
+      const seg = (2 * Math.PI) / SPIN_SEGMENTS.length;
+      const targetAngle = (2 * Math.PI * 6) + (Math.PI * 1.5 - (idx * seg + seg / 2)); // 6 extra spins, land pointer (top) on segment idx
+      const startTime = performance.now();
+      const duration = 2600;
+      const startRotation = spinRotation;
+      function animateSpin(now) {
+        const t = Math.min(1, (now - startTime) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        spinRotation = startRotation + eased * targetAngle;
+        drawSpinWheel();
+        if (t < 1) requestAnimationFrame(animateSpin);
+        else {
+          showToast(`🎡 You won +${r.coinsAwarded} coins!`);
+          refreshWalletStats();
+          loadEarnStatus();
+          spinning = false;
+        }
+      }
+      requestAnimationFrame(animateSpin);
+    } catch (err) {
+      showToast(err.message);
+      el('spinBtn').disabled = false;
+      el('spinBtn').textContent = originalLabel;
+      spinning = false;
+    }
   });
 
   el('scratchBtn').addEventListener('click', async () => {
     try {
       const r = await api('/earn/scratch', { method: 'POST' });
-      showToast(`🎫 You scratched +${r.coinsAwarded} coins!`);
-      await refreshWalletStats();
-      await loadEarnStatus();
+      drawScratchCanvas();
+      el('scratchPrize').textContent = `+${r.coinsAwarded} coins`;
+      el('scratchBtn').disabled = true;
+      setupScratchInteraction(() => {
+        showToast(`🎫 Revealed +${r.coinsAwarded} coins!`);
+        refreshWalletStats();
+        loadEarnStatus();
+      });
     } catch (err) { showToast(err.message); }
   });
 
@@ -797,13 +892,15 @@
     const me = await api('/wallet/me');
     el('walletBalance').textContent = me.wallet_coins;
     el('statEarned').textContent = me.total_earned;
-    el('statAdsWatched').textContent = me.ads_watched_today;
     el('statINR').textContent = '₹' + me.walletInr.toFixed(2);
     el('withdrawAvailable').textContent = '₹' + me.walletInr.toFixed(2);
     el('withdrawBtn').disabled = me.walletInr < me.minWithdrawInr;
     el('withdrawRateText').textContent = `Minimum withdrawal ₹${me.minWithdrawInr.toFixed(2)}`;
-    serverState.isPremium = !!me.is_premium;
+    isPremium = !!me.is_premium;
     renderPlanUI();
+    el('heroWalletInr').textContent = '₹' + me.walletInr.toFixed(2);
+    el('heroCoins').textContent = me.wallet_coins;
+    el('heroAdsWatched').textContent = me.total_earned;
   }
 
   async function loadReferralInfo() {
@@ -893,31 +990,17 @@
       footnote.style.display = 'none';
     }
     el('statRank').textContent = data.yourRank ? (data.yourRank <= 10 ? '#' + data.yourRank + ' today' : 'Outside top 10') : 'Not ranked';
-  }
-
-  // ---------- premium (Razorpay) ----------
+    el('heroRank').textContent = data.yourRank ? '#' + data.yourRank : '—';
+        }
+    // ---------- premium (Razorpay) ----------
   function renderPlanUI() {
-    el('planBadge').textContent = serverState.isPremium ? 'Premium Plan' : 'Free Plan';
-    el('planBadge').className = 'plan-badge ' + (serverState.isPremium ? 'premium' : 'free');
-
-    const fill = el('usageFill');
-    if (serverState.isPremium) {
-      fill.className = 'usage-fill unlimited';
-      el('usageLabel').textContent = `${serverState.adsWatchedToday} ads watched today · Unlimited`;
-    } else {
-      fill.className = 'usage-fill';
-      const pct = Math.min(100, (serverState.adsWatchedToday / serverState.dailyLimit) * 100);
-      fill.style.width = pct + '%';
-      el('usageLabel').textContent = `${serverState.adsWatchedToday} / ${serverState.dailyLimit} ads watched today`;
-    }
-
-    el('upgradeBtn').textContent = serverState.isPremium ? 'You are Premium ✓' : 'Upgrade to Premium';
-    el('upgradeBtn').disabled = serverState.isPremium;
-    el('premiumCard').classList.toggle('highlight', !serverState.isPremium);
+    el('upgradeBtn').textContent = isPremium ? 'You are Premium ✓' : 'Upgrade to Premium';
+    el('upgradeBtn').disabled = isPremium;
+    el('premiumCard').classList.toggle('highlight', !isPremium);
   }
 
   el('upgradeBtn').addEventListener('click', async () => {
-    if (serverState.isPremium) return;
+    if (isPremium) return;
     try {
       const { order, keyId } = await api('/payment/create-order', { method: 'POST' });
       const rzp = new Razorpay({
@@ -926,12 +1009,11 @@
         currency: order.currency,
         order_id: order.id,
         name: 'Earny Day',
-        description: 'Premium subscription (unlimited ads)',
+        description: 'Premium subscription (2x rewards)',
         handler: async function (response) {
           try {
             await api('/payment/verify', { method: 'POST', body: JSON.stringify(response) });
-            showToast('Premium unlocked — unlimited ads from now on!');
-            await loadQueue();
+            showToast('Premium unlocked — 2x rewards from now on!');
             await refreshWalletStats();
           } catch (err) {
             showToast('Payment verification failed: ' + err.message);
@@ -953,20 +1035,9 @@
     setTimeout(() => t.classList.remove('show'), 2400);
   }
 
-  // ---------- real ad network (loads only when user opens the Ads tab — never on login/signup) ----------
-  let adNetworkLoaded = false;
-  function loadAdNetworkScript() {
-    if (adNetworkLoaded) return;
-    adNetworkLoaded = true;
-    (function(s){s.dataset.zone='11270018',s.src='https://al5sm.com/tag.min.js'})(
-      [document.documentElement, document.body].filter(Boolean).pop().appendChild(document.createElement('script'))
-    );
-  }
-
   // ---------- init after login ----------
   async function refreshEverything() {
     await refreshWalletStats();
-    await loadQueue();
     await loadHistory();
     await loadReferralInfo();
     await loadEarnStatus();
@@ -980,7 +1051,6 @@
       el('welcomeName').textContent = 'Welcome, ' + me.name;
       el('authScreen').style.display = 'none';
       el('app').style.display = 'block';
-      loadAdNetworkScript();
       await refreshEverything();
     } catch (err) {
       // token expired or invalid — clear it and fall back to the login screen

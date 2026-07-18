@@ -247,7 +247,6 @@ app.post('/api/auth/signup', async (req, res) => {
       const refRes = await pool.query('SELECT id FROM users WHERE referral_code = $1', [ref.toUpperCase()]);
       if (refRes.rows[0]) referrerId = refRes.rows[0].id;
     }
-
     const hash = bcrypt.hashSync(password, 10);
     let userId;
     if (existing) {
@@ -474,7 +473,10 @@ app.get('/api/tasks/postback', async (req, res) => {
     const cfg = await getConfig();
     const payoutInr = payoutUsd * cfg.usd_to_inr_rate;
     const userShareInr = payoutInr * (cfg.cpa_user_share_percent / 100);
-    const coinsAwarded = Math.round(userShareInr / cfg.coin_to_inr);
+    let coinsAwarded = Math.round(userShareInr / cfg.coin_to_inr);
+
+    const userRes = await pool.query('SELECT is_premium FROM users WHERE id = $1', [userId]);
+    if (userRes.rows[0]?.is_premium) coinsAwarded *= 2;
 
     await pool.query('INSERT INTO offer_completions (user_id, network_trans_id, offer_id, payout_usd, coins_awarded) VALUES ($1, $2, $3, $4, $5)',
       [userId, trans_id, offer_id || null, payoutUsd, coinsAwarded]);
@@ -516,9 +518,11 @@ function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function todayStr() { return new Date().toISOString().slice(0, 10); }
 
 async function awardCoins(userId, coins) {
-  await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [coins, userId]);
-}
-
+  const { rows } = await pool.query('SELECT is_premium FROM users WHERE id = $1', [userId]);
+  const finalCoins = rows[0]?.is_premium ? coins * 2 : coins;
+  await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [finalCoins, userId]);
+  return finalCoins;
+      }
 app.get('/api/earn/status', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
@@ -551,26 +555,8 @@ app.post('/api/earn/checkin', requireAuth, async (req, res) => {
     const coins = STREAK_REWARDS[newStreak - 1];
 
     await pool.query('UPDATE users SET checkin_streak = $1, last_checkin_date = $2 WHERE id = $3', [newStreak, today, u.id]);
-    await awardCoins(u.id, coins);
-    res.json({ coinsAwarded: coins, streak: newStreak });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Check-in failed.' }); }
-});
-
-app.post('/api/earn/spin', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    const today = todayStr();
-    const lastDate = u.last_spin_date ? new Date(u.last_spin_date).toISOString().slice(0, 10) : null;
-    if (lastDate === today) return res.status(400).json({ error: 'Alreadyachecked in today.' });
-
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const newStreak = lastDate === yesterday ? (u.checkin_streak % 7) + 1 : 1;
-    const coins = STREAK_REWARDS[newStreak - 1];
-
-    await pool.query('UPDATE users SET checkin_streak = $1, last_checkin_date = $2 WHERE id = $3', [newStreak, today, u.id]);
-    await awardCoins(u.id, coins);
-    res.json({ coinsAwarded: coins, streak: newStreak });
+    const finalCoins = await awardCoins(u.id, coins);
+    res.json({ coinsAwarded: finalCoins, streak: newStreak });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Check-in failed.' }); }
 });
 
@@ -584,8 +570,8 @@ app.post('/api/earn/spin', requireAuth, async (req, res) => {
 
     const coins = pickRandom(SPIN_REWARDS);
     await pool.query('UPDATE users SET last_spin_date = $1 WHERE id = $2', [today, u.id]);
-    await awardCoins(u.id, coins);
-    res.json({ coinsAwarded: coins });
+    const finalCoins = await awardCoins(u.id, coins);
+    res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Spin failed.' }); }
 });
 
@@ -599,8 +585,8 @@ app.post('/api/earn/scratch', requireAuth, async (req, res) => {
 
     const coins = pickRandom(SCRATCH_REWARDS);
     await pool.query('UPDATE users SET last_scratch_date = $1 WHERE id = $2', [today, u.id]);
-    await awardCoins(u.id, coins);
-    res.json({ coinsAwarded: coins });
+    const finalCoins = await awardCoins(u.id, coins);
+    res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Scratch failed.' }); }
 });
 
@@ -614,8 +600,8 @@ app.post('/api/earn/complete-profile', requireAuth, async (req, res) => {
 
     const coins = 30;
     await pool.query('UPDATE users SET dob = $1, gender = $2, profile_bonus_paid = TRUE WHERE id = $3', [dob, gender, u.id]);
-    await awardCoins(u.id, coins);
-    res.json({ coinsAwarded: coins });
+    const finalCoins = await awardCoins(u.id, coins);
+    res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Could not save profile.' }); }
 });
 
@@ -631,8 +617,8 @@ app.post('/api/earn/claim-badge', requireAuth, async (req, res) => {
     if (u.total_earned < milestone.threshold) return res.status(400).json({ error: 'Not unlocked yet.' });
 
     await pool.query(`UPDATE users SET ${milestone.column} = TRUE WHERE id = $1`, [u.id]);
-    await awardCoins(u.id, milestone.coins);
-    res.json({ coinsAwarded: milestone.coins });
+    const finalCoins = await awardCoins(u.id, milestone.coins);
+    res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Could not claim badge.' }); }
 });
 

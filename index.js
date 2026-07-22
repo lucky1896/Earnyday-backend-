@@ -78,6 +78,14 @@ async function initDb() {
       coins_awarded INTEGER NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      icon TEXT NOT NULL,
+      title TEXT NOT NULL,
+      subtitle TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `);
   // Migration-safe: add new config columns if this table already existed before these were introduced
   await pool.query(`
@@ -247,6 +255,7 @@ app.post('/api/auth/signup', async (req, res) => {
       const refRes = await pool.query('SELECT id FROM users WHERE referral_code = $1', [ref.toUpperCase()]);
       if (refRes.rows[0]) referrerId = refRes.rows[0].id;
     }
+
     const hash = bcrypt.hashSync(password, 10);
     let userId;
     if (existing) {
@@ -296,6 +305,8 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       const bonus = cfg.referral_bonus_coins;
       await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [bonus, user.referred_by]);
       await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1, referral_bonus_paid = TRUE WHERE id = $2', [bonus, user.id]);
+      await logActivity(user.referred_by, '🎁', 'Referral bonus earned', `A friend joined using your code · +${bonus} coins`);
+      await logActivity(user.id, '🎁', 'Welcome bonus', `Referral signup bonus · +${bonus} coins`);
     }
 
     res.json({ token: signToken(user.id), user: { id: user.id, name: user.name, email: user.email } });
@@ -374,6 +385,26 @@ app.get('/api/wallet/me', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Could not load wallet.' });
   }
 });
+
+app.post('/api/auth/change-password', requireAuth, async (req, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both current and new password are required' });
+    if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
+    const user = rows[0];
+    if (!bcrypt.compareSync(currentPassword, user.password_hash)) return res.status(401).json({ error: 'Current password is incorrect' });
+
+    const hash = bcrypt.hashSync(newPassword, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, user.id]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not change password.' });
+  }
+});
+
 app.get('/api/wallet/history', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -419,7 +450,7 @@ app.get('/api/ads/queue', requireAuth, async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'Could not load ads.' });
   }
-});
+  });
 app.post('/api/ads/claim', requireAuth, async (req, res) => {
   try {
     const { adName } = req.body;
@@ -482,6 +513,7 @@ app.get('/api/tasks/postback', async (req, res) => {
       [userId, trans_id, offer_id || null, payoutUsd, coinsAwarded]);
     await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2',
       [coinsAwarded, userId]);
+    await logActivity(userId, '🎯', 'Task completed', `+${coinsAwarded} coins`);
 
     res.send('OK');
   } catch (err) {
@@ -522,7 +554,24 @@ async function awardCoins(userId, coins) {
   const finalCoins = rows[0]?.is_premium ? coins * 2 : coins;
   await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [finalCoins, userId]);
   return finalCoins;
-      }
+}
+
+async function logActivity(userId, icon, title, subtitle) {
+  try {
+    await pool.query('INSERT INTO activity_log (user_id, icon, title, subtitle) VALUES ($1, $2, $3, $4)', [userId, icon, title, subtitle || null]);
+  } catch (err) { console.error('logActivity failed:', err.message); }
+}
+
+app.get('/api/notifications', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT icon, title, subtitle, created_at FROM activity_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 30',
+      [req.userId]
+    );
+    res.json(rows);
+  } catch (err) { console.error(err); res.status(500).json({ error: 'Could not load notifications.' }); }
+});
+
 app.get('/api/earn/status', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
@@ -556,6 +605,7 @@ app.post('/api/earn/checkin', requireAuth, async (req, res) => {
 
     await pool.query('UPDATE users SET checkin_streak = $1, last_checkin_date = $2 WHERE id = $3', [newStreak, today, u.id]);
     const finalCoins = await awardCoins(u.id, coins);
+    await logActivity(u.id, '📅', 'Daily check-in bonus', `Day ${newStreak} streak · +${finalCoins} coins`);
     res.json({ coinsAwarded: finalCoins, streak: newStreak });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Check-in failed.' }); }
 });
@@ -571,6 +621,7 @@ app.post('/api/earn/spin', requireAuth, async (req, res) => {
     const coins = pickRandom(SPIN_REWARDS);
     await pool.query('UPDATE users SET last_spin_date = $1 WHERE id = $2', [today, u.id]);
     const finalCoins = await awardCoins(u.id, coins);
+    await logActivity(u.id, '🎡', 'Spin & Win reward', `+${finalCoins} coins`);
     res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Spin failed.' }); }
 });
@@ -586,6 +637,7 @@ app.post('/api/earn/scratch', requireAuth, async (req, res) => {
     const coins = pickRandom(SCRATCH_REWARDS);
     await pool.query('UPDATE users SET last_scratch_date = $1 WHERE id = $2', [today, u.id]);
     const finalCoins = await awardCoins(u.id, coins);
+    await logActivity(u.id, '🎫', 'Scratch card reward', `+${finalCoins} coins`);
     res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Scratch failed.' }); }
 });
@@ -601,6 +653,7 @@ app.post('/api/earn/complete-profile', requireAuth, async (req, res) => {
     const coins = 30;
     await pool.query('UPDATE users SET dob = $1, gender = $2, profile_bonus_paid = TRUE WHERE id = $3', [dob, gender, u.id]);
     const finalCoins = await awardCoins(u.id, coins);
+    await logActivity(u.id, '📝', 'Profile completed', `+${finalCoins} coins`);
     res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Could not save profile.' }); }
 });
@@ -618,6 +671,7 @@ app.post('/api/earn/claim-badge', requireAuth, async (req, res) => {
 
     await pool.query(`UPDATE users SET ${milestone.column} = TRUE WHERE id = $1`, [u.id]);
     const finalCoins = await awardCoins(u.id, milestone.coins);
+    await logActivity(u.id, '🏅', `${milestone.key} badge unlocked`, `+${finalCoins} coins`);
     res.json({ coinsAwarded: finalCoins });
   } catch (err) { console.error(err); res.status(500).json({ error: 'Could not claim badge.' }); }
 });
@@ -744,10 +798,12 @@ app.get('/api/admin/withdrawals', requireAdmin, async (req, res) => {
 app.post('/api/admin/withdrawals/:id/mark-paid', requireAdmin, async (req, res) => {
   try {
     const result = await pool.query(
-      `UPDATE withdrawals SET status = 'paid', paid_at = NOW() WHERE id = $1 AND status = 'pending'`,
+      `UPDATE withdrawals SET status = 'paid', paid_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING user_id, amount_inr`,
       [req.params.id]
     );
     if (result.rowCount === 0) return res.status(404).json({ error: 'Withdrawal not found or already paid' });
+    const w = result.rows[0];
+    await logActivity(w.user_id, '✅', 'Withdrawal approved', `₹${w.amount_inr} has been sent`);
     res.json({ success: true });
   } catch (err) {
     console.error(err);

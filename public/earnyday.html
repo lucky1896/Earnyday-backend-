@@ -1,1 +1,1150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earny Day — Watch. Earn. Daily.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+  :root{
+    --bg:#0e0d1a; --surface:#171529; --surface-alt:#1f1c35; --line:#2c2848;
+    --primary:#f5a623; --primary-soft:rgba(245,166,35,0.14);
+    --accent:#f5a623; --accent-soft:rgba(245,166,35,0.14);
+    --indigo:#8b5cf6; --indigo-soft:rgba(139,92,246,0.16);
+    --text:#f2f0fa; --text-dim:#9691b8; --radius:14px;
+    --shadow:0 4px 14px rgba(0,0,0,0.35);
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; line-height:1.5; min-height:100vh; padding-bottom:78px; }
+  h1,h2,h3{ font-family:'Inter',sans-serif; font-weight:700; letter-spacing:-0.01em; }
+  .mono{ font-family:'JetBrains Mono',monospace; }
+  .wrap{ max-width:1080px; margin:0 auto; padding:0 24px; }
 
+  /* ---------- auth screen ---------- */
+  #authScreen{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
+  }
+  .auth-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:32px; width:100%; max-width:380px; }
+  .auth-card h1{ font-size:1.4rem; margin-bottom:6px; }
+  .auth-card p.sub{ color:var(--text-dim); font-size:0.88rem; margin-bottom:22px; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:0.82rem; font-weight:600; margin-bottom:6px; }
+  .field input{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+    font-family:'Inter',sans-serif; font-size:0.92rem; background:var(--surface-alt); color:var(--text);
+  }
+  .field input:focus{ outline:2px solid var(--primary-soft); border-color:var(--primary); }
+  .field.pw-field{ position:relative; }
+  .field.pw-field input{ padding-right:44px; }
+  .pw-toggle{
+    position:absolute; right:6px; top:29px; background:none; border:none; cursor:pointer;
+    padding:6px 8px; font-size:0.78rem; font-weight:600; color:var(--text-dim); border-radius:6px;
+  }
+  .pw-toggle:hover{ color:var(--primary); }
+  .resend-row{ text-align:center; font-size:0.82rem; color:var(--text-dim); margin-top:4px; }
+  .resend-row a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
+  .resend-row.disabled a{ color:var(--text-dim); pointer-events:none; }
+  .auth-error{ color:#c4432f; font-size:0.82rem; margin-bottom:10px; min-height:1em; }
+  .auth-switch{ text-align:center; margin-top:16px; font-size:0.85rem; color:var(--text-dim); }
+  .auth-switch a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
+  /* ---------- app shell (hidden until logged in) ---------- */
+  #app{ display:none; }
+
+  header.topbar{ position:sticky; top:0; z-index:20; background:var(--surface); border-bottom:1px solid var(--line); }
+  .topbar-inner{ display:flex; align-items:center; justify-content:space-between; padding:16px 24px; }
+  .logo{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem; }
+  .logo-mark{ width:28px; height:28px; border-radius:8px; background:var(--primary); position:relative; flex-shrink:0; }
+  .logo-mark::after{ content:""; position:absolute; width:10px; height:10px; top:9px; left:9px; background:var(--surface); border-radius:2px; }
+  .wallet-pill{ display:flex; align-items:center; gap:8px; background:var(--surface-alt); border:1px solid var(--line); padding:8px 16px; border-radius:999px; font-size:0.9rem; }
+  .wallet-pill .amt{ color:var(--accent); font-weight:700; }
+  .logout-btn{ background:none; border:none; color:var(--text-dim); font-size:0.78rem; cursor:pointer; padding:4px; }
+  .bell-btn{ background:none; border:none; font-size:1.1rem; cursor:pointer; position:relative; padding:4px; }
+  .bell-dot{ position:absolute; top:2px; right:2px; width:8px; height:8px; border-radius:50%; background:var(--accent); border:1.5px solid var(--surface); }
+  .notif-row{ display:flex; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .notif-row .ni{ font-size:1.3rem; }
+  .notif-row .nt{ font-weight:600; font-size:0.88rem; }
+  .notif-row .ns{ color:var(--text-dim); font-size:0.78rem; margin-top:2px; }
+  .notif-row .nd{ color:var(--text-dim); font-size:0.7rem; margin-top:4px; }
+
+  nav.tabbar{ position:fixed; bottom:0; left:0; right:0; z-index:30; background:var(--surface); border-top:1px solid var(--line); box-shadow:0 -2px 10px rgba(16,24,40,0.04); display:flex; justify-content:center; }
+  .tabbar-inner{ display:flex; width:100%; max-width:600px; }
+  .tab-btn{ flex:1; background:none; border:none; padding:12px 4px 10px; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-dim); font-size:0.68rem; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif; }
+  .tab-btn .ic{ font-size:1.1rem; }
+  .tab-btn.active{ color:var(--primary); }
+
+  .page{ display:none; padding:32px 0 20px; animation:fadeIn .25s ease; }
+  .page.active{ display:block; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
+  .page-head{ margin-bottom:24px; }
+  .page-head h1{ font-size:1.6rem; }
+  .page-head p{ color:var(--text-dim); font-size:0.92rem; margin-top:6px; }
+  .eyebrow{ display:inline-flex; align-items:center; gap:8px; color:var(--primary); font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px; }
+  .eyebrow::before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--primary); }
+
+  .status-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:22px 26px; margin-bottom:24px; box-shadow:var(--shadow); }
+  .status-top{ display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+  .plan-badge{ padding:5px 14px; border-radius:999px; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+  .plan-badge.free{ background:var(--surface-alt); color:var(--text-dim); border:1px solid var(--line); }
+  .plan-badge.premium{ background:var(--indigo-soft); color:var(--indigo); border:1px solid rgba(76,79,224,0.35); }
+  .usage-label{ display:flex; justify-content:space-between; font-size:0.85rem; color:var(--text-dim); margin-bottom:6px; }
+  .usage-bar{ height:10px; border-radius:999px; background:var(--surface-alt); overflow:hidden; }
+  .usage-fill{ height:100%; background:var(--primary); border-radius:999px; transition:width .4s ease; }
+  .usage-fill.unlimited{ background:linear-gradient(90deg, var(--primary), var(--indigo)); width:100% !important; }
+
+  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:14px; }
+  .stat{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+  .stat .num{ font-size:1.5rem; font-weight:700; }
+  .stat .lab{ color:var(--text-dim); font-size:0.8rem; margin-top:4px; }
+  .stat.you .num{ color:var(--accent); }
+
+  .queue{ display:flex; flex-direction:column; gap:14px; }
+  .ad-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; display:flex; align-items:center; gap:18px; box-shadow:var(--shadow); }
+  .ad-card.active{ border-color:var(--primary); box-shadow:0 0 0 1px var(--primary) inset; }
+  .ad-card.done{ opacity:0.45; }
+  .ad-thumb{ width:64px; height:44px; border-radius:8px; flex-shrink:0; background:var(--surface-alt); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:0.7rem; color:var(--text-dim); }
+  .ad-info{ flex:1; min-width:0; }
+  .ad-info .name{ font-weight:600; font-size:0.95rem; }
+  .ad-info .meta{ color:var(--text-dim); font-size:0.8rem; margin-top:2px; }
+  .ad-action{ flex-shrink:0; min-width:96px; text-align:right; }
+
+  .ring{ width:44px; height:44px; border-radius:50%; background:conic-gradient(var(--primary) calc(var(--p,0) * 1%), var(--line) 0); display:flex; align-items:center; justify-content:center; font-size:0.72rem; font-weight:700; margin-left:auto; }
+  .ring::after{ content:attr(data-t); width:34px; height:34px; border-radius:50%; background:var(--surface); display:flex; align-items:center; justify-content:center; }
+
+  button{ font-family:'Inter',sans-serif; font-weight:600; cursor:pointer; border:none; border-radius:999px; padding:10px 20px; font-size:0.85rem; transition:transform .15s ease, opacity .15s ease; }
+  button:active{ transform:scale(0.96); }
+  button:disabled{ opacity:0.45; cursor:not-allowed; }
+  .btn-claim{ background:var(--primary); color:#1a1206; font-weight:700; }
+  .btn-full.loading{ display:flex; align-items:center; justify-content:center; gap:10px; }
+  .spinner{
+    width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; flex-shrink:0;
+  }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .btn-claim:hover:not(:disabled){ opacity:0.9; }
+  .btn-premium{ background:var(--indigo); color:#ffffff; }
+  .btn-premium:hover{ opacity:0.9; }
+  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
+  .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
+  .btn-full{ width:100%; }
+  .spinner{
+    display:inline-block; width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; vertical-align:middle; margin-right:8px;
+  }
+  .spinner.dark{ border-color:rgba(15,107,92,0.25); border-top-color:var(--primary); }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .loading-block{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:48px 20px; color:var(--text-dim); font-size:0.9rem; }
+  .loading-block .spinner{ width:28px; height:28px; border-width:3px; margin-right:0; }
+
+  .lock-card{ background:var(--surface); border:1px dashed var(--line); border-radius:var(--radius); padding:28px; text-align:center; }
+  .lock-card .icon{ font-size:2rem; margin-bottom:10px; }
+  .lock-card h3{ font-size:1.1rem; margin-bottom:6px; }
+  .lock-card p{ color:var(--text-dim); font-size:0.88rem; margin-bottom:18px; max-width:340px; margin-left:auto; margin-right:auto; }
+
+  .withdraw-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-bottom:24px; box-shadow:var(--shadow); }
+  .rate{ color:var(--text-dim); font-size:0.82rem; margin-top:6px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:0.88rem; }
+  th{ text-align:left; color:var(--text-dim); font-weight:600; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; padding:8px 10px; border-bottom:1px solid var(--line); }
+  td{ padding:10px 10px; border-bottom:1px solid var(--line); }
+  tr:last-child td{ border-bottom:none; }
+  .pos{ color:var(--primary); }
+
+  .lb-row{ display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; box-shadow:var(--shadow); }
+  .lb-row.you-row{ border-color:var(--primary); box-shadow:0 0 0 1px var(--primary) inset; }
+  .lb-rank{ width:28px; text-align:center; font-weight:700; font-family:'JetBrains Mono',monospace; color:var(--text-dim); }
+  .lb-row.top1 .lb-rank{ color:var(--accent); }
+  .lb-row.top2 .lb-rank{ color:#8a93a6; }
+  .lb-row.top3 .lb-rank{ color:#b07a3a; }
+  .lb-avatar{ width:36px; height:36px; border-radius:50%; background:var(--surface-alt); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem; flex-shrink:0; }
+  .lb-name{ flex:1; font-weight:600; font-size:0.92rem; }
+  .lb-name .you-tag{ color:var(--primary); font-size:0.72rem; font-weight:700; margin-left:6px; }
+  .lb-coins{ font-family:'JetBrains Mono',monospace; color:var(--accent); font-weight:700; font-size:0.9rem; }
+  .lb-footnote{ color:var(--text-dim); font-size:0.85rem; text-align:center; margin-top:14px; padding:14px; border:1px dashed var(--line); border-radius:12px; }
+
+  .plan-compare{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:20px; }
+  .earn-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; }
+  .wallet-hero{
+    background:linear-gradient(135deg, #241f42, #1a1730);
+    border:1px solid var(--line); border-radius:20px; padding:24px; margin-bottom:16px;
+    position:relative; overflow:hidden;
+  }
+  .wallet-hero::after{ content:"💰"; position:absolute; right:-10px; top:-10px; font-size:5rem; opacity:0.08; }
+  .wallet-hero .wh-label{ color:var(--text-dim); font-size:0.82rem; }
+  .wallet-hero .wh-amt{ font-size:2.1rem; font-weight:800; color:var(--primary); margin:4px 0 14px; }
+  .wallet-hero .wh-row{ display:flex; gap:24px; }
+  .wallet-hero .wh-item .l{ color:var(--text-dim); font-size:0.72rem; }
+  .wallet-hero .wh-item .v{ font-weight:700; font-size:0.95rem; }
+  .premium-banner{
+    background:linear-gradient(135deg, var(--indigo), #6d28d9);
+    border-radius:16px; padding:18px 20px; margin-bottom:20px; display:flex; align-items:center; gap:14px;
+    cursor:pointer;
+  }
+  .premium-banner .pb-ic{ font-size:1.8rem; }
+  .premium-banner .pb-title{ font-weight:700; color:#fff; font-size:0.95rem; }
+  .premium-banner .pb-sub{ color:rgba(255,255,255,0.75); font-size:0.78rem; }
+  .qa-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:24px; }
+  .qa-item{
+    background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 8px;
+    text-align:center; cursor:pointer; transition:transform .1s ease;
+  }
+  .qa-item:active{ transform:scale(0.95); }
+  .qa-item .qa-ic{ font-size:1.5rem; margin-bottom:6px; }
+  .qa-item .qa-label{ font-size:0.74rem; font-weight:600; color:var(--text); }
+  .earn-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; text-align:center; box-shadow:var(--shadow); }
+  .earn-ic{ font-size:1.6rem; margin-bottom:6px; }
+  .earn-title{ font-weight:600; font-size:0.9rem; margin-bottom:2px; }
+  .earn-sub{ color:var(--text-dim); font-size:0.76rem; margin-bottom:12px; min-height:2.2em; }
+  .badge-row{ display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; box-shadow:var(--shadow); }
+  .badge-row.locked{ opacity:0.55; }
+  .badge-ic{ font-size:1.5rem; }
+  .badge-info{ flex:1; }
+  .badge-info .bt{ font-weight:600; font-size:0.9rem; text-transform:capitalize; }
+  .badge-info .bs{ color:var(--text-dim); font-size:0.78rem; }
+  .checkin-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+  .checkin-row{ display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+  .checkin-day{ background:var(--surface-alt); border:1px solid var(--line); border-radius:10px; padding:10px 4px; text-align:center; }
+  .checkin-day .cd-label{ font-size:0.7rem; color:var(--text-dim); margin-bottom:4px; }
+  .checkin-day .cd-ic{ font-size:1.1rem; }
+  .checkin-day .cd-coin{ font-size:0.72rem; font-weight:600; margin-top:2px; }
+  .checkin-day.done{ border-color:var(--primary); background:var(--primary-soft); }
+  .checkin-day.today{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .checkin-day.locked{ opacity:0.5; }
+  .plan-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow); }
+  .plan-card.highlight{ border-color:var(--indigo); box-shadow:0 0 0 1px var(--indigo) inset; }
+  .plan-card .ptitle{ font-size:1.1rem; font-weight:700; margin-bottom:4px; }
+  .plan-card .pprice{ color:var(--text-dim); font-size:0.85rem; margin-bottom:16px; }
+  .plan-card ul{ list-style:none; display:flex; flex-direction:column; gap:10px; margin-bottom:20px; }
+  .plan-card li{ font-size:0.88rem; color:var(--text); display:flex; gap:8px; }
+  .plan-card li::before{ content:"✓"; color:var(--primary); font-weight:700; }
+
+  #toast{ position:fixed; bottom:76px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--text); color:var(--surface); border:1px solid var(--text); padding:14px 22px; border-radius:12px; font-size:0.9rem; opacity:0; pointer-events:none; transition:all .3s ease; z-index:50; text-align:center; max-width:90%; }
+  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .note{ background:var(--surface-alt); border:1px solid var(--line); border-left:3px solid var(--indigo); padding:14px 18px; border-radius:8px; color:var(--text-dim); font-size:0.85rem; margin-top:18px; }
+</style></head>
+<body>
+
+<!-- ============ AUTH SCREEN (login/signup) ============ -->
+<div id="authScreen">
+  <div class="auth-card">
+    <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1 id="authTitle">Log in</h1>
+    <p class="sub" id="authSub">Welcome back — watch ads, earn coins.</p>
+
+    <div class="auth-error" id="authError"></div>
+
+    <div class="field" id="nameField" style="display:none;">
+      <label>Name</label>
+      <input type="text" id="nameInput" placeholder="Your name">
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="emailInput" placeholder="you@example.com">
+    </div>
+    <div class="field pw-field">
+      <label>Password</label>
+      <input type="password" id="passwordInput" placeholder="••••••••">
+      <button type="button" class="pw-toggle" id="pwToggleBtn">Show</button>
+    </div>
+
+    <button class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
+
+    <div class="auth-switch">
+      <span id="authSwitchText">Don't have an account?</span>
+      <a id="authSwitchLink">Sign up</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ OTP VERIFICATION SCREEN ============ -->
+<div id="otpScreen" style="display:none;">
+  <div class="auth-card">
+    <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1>Verify your email</h1>
+    <p class="sub">We sent a 6-digit code to <strong id="otpEmailDisplay"></strong>. Enter it below to activate your account.</p>
+
+    <div class="auth-error" id="otpError"></div>
+
+    <div class="field">
+      <label>Verification code</label>
+      <input type="text" id="otpInput" inputmode="numeric" maxlength="6" placeholder="123456" style="letter-spacing:0.3em; font-family:'JetBrains Mono',monospace; text-align:center; font-size:1.1rem;">
+    </div>
+
+    <button class="btn-claim btn-full" id="otpSubmitBtn">Verify & Continue</button>
+
+    <div class="resend-row" id="resendRow">
+      Didn't get a code? <a id="resendOtpLink">Resend code</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MAIN APP ============ -->
+<div id="app">
+
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo"><span class="logo-mark"></span> Earny Day</div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="wallet-pill">💰 <span class="amt mono" id="walletBalance">0</span> coins</div>
+        <button class="bell-btn" id="notifBtn">🔔<span class="bell-dot" id="notifDot" style="display:none;"></span></button>
+        <button class="logout-btn" id="logoutBtn">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- notifications panel -->
+  
+<div id="notifPanelBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:70; justify-content:flex-end;" onclick="if(event.target===this) this.style.display='none';">
+    <div style="background:var(--surface); width:100%; max-width:380px; height:100%; padding:20px; overflow-y:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3>Notifications</h3>
+        <button class="btn-ghost" onclick="document.getElementById('notifPanelBg').style.display='none'" style="padding:6px 14px;">Close</button>
+      </div>
+      <div id="notifList"></div>
+    </div>
+  </div>
+
+  <main class="wrap">
+
+    <section id="page-dashboard" class="page active">
+      <div class="eyebrow">Your Account</div>
+      <div class="page-head">
+        <h1 id="welcomeName">Welcome back</h1>
+        <p>Here's your activity for today.</p>
+      </div>
+
+      <div class="wallet-hero">
+        <div class="wh-label">Total Balance</div>
+        <div class="wh-amt mono" id="heroWalletInr">₹0.00</div>
+        <div class="wh-row">
+          <div class="wh-item"><div class="l">Coins</div><div class="v mono" id="heroCoins">0</div></div>
+          <div class="wh-item"><div class="l">Total Earned</div><div class="v mono" id="heroAdsWatched">0</div></div>
+          <div class="wh-item"><div class="l">Rank</div><div class="v mono" id="heroRank">—</div></div>
+        </div>
+      </div>
+
+      <div class="qa-grid">
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=tasks]').click()">
+          <div class="qa-ic">🎯</div><div class="qa-label">Surveys</div>
+        </div>
+        <div class="qa-item" onclick="document.getElementById('checkinBtn').scrollIntoView({behavior:'smooth', block:'center'})">
+          <div class="qa-ic">📅</div><div class="qa-label">Daily Check-in</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=tasks]').click()">
+          <div class="qa-ic">📋</div><div class="qa-label">Tasks</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=refer]').click()">
+          <div class="qa-ic">🎁</div><div class="qa-label">Refer & Earn</div>
+        </div>
+        <div class="qa-item" onclick="document.getElementById('spinCanvas') ? document.getElementById('spinCanvas').scrollIntoView({behavior:'smooth', block:'center'}) : null">
+          <div class="qa-ic">🎡</div><div class="qa-label">Spin & Win</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=more]').click()">
+          <div class="qa-ic">🏆</div><div class="qa-label">Leaderboard</div>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat you"><div class="num mono" id="statEarned">0</div><div class="lab">Coins earned (all time)</div></div>
+        <div class="stat"><div class="num mono" id="statINR">₹0.00</div><div class="lab">Wallet value</div></div>
+        <div class="stat"><div class="num mono" id="statRank">Not ranked</div><div class="lab">Today's leaderboard</div></div>
+      </div>
+
+      <div class="page-head" style="margin-top:28px;">
+        <h1 style="font-size:1.2rem;">More ways to earn</h1>
+      </div>
+
+      <div class="checkin-card">
+        <div class="earn-title" style="margin-bottom:10px;">📅 Daily Check-in</div>
+        <div class="checkin-row" id="checkinRow"></div>
+        <button class="btn-claim btn-full" id="checkinBtn" style="margin-top:14px;">Check In</button>
+      </div>
+
+      <div class="earn-grid" style="margin-top:14px;">
+        <div class="earn-card">
+          <div class="earn-title" style="margin-bottom:8px;">🎡 Spin & Win</div>
+          <canvas id="spinCanvas" width="220" height="220" style="max-width:100%; margin:0 auto; display:block;"></canvas>
+          <button class="btn-claim btn-full" id="spinBtn" style="margin-top:12px;">Spin</button>
+        </div>
+        <div class="earn-card">
+          <div class="earn-title" style="margin-bottom:8px;">🎫 Scratch Card</div>
+          <div style="position:relative; width:100%; max-width:220px; height:120px; margin:0 auto;">
+            <div id="scratchPrize" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.3rem; color:var(--accent); background:var(--surface-alt); border-radius:10px;">Tap Scratch</div>
+            <canvas id="scratchCanvas" width="220" height="120" style="position:absolute; inset:0; border-radius:10px; touch-action:none;"></canvas>
+          </div>
+          <button class="btn-claim btn-full" id="scratchBtn" style="margin-top:12px;">New Scratch Card</button>
+        </div>
+        <div class="earn-card" id="profileCard">
+          <div class="earn-ic">📝</div>
+          <div class="earn-title">Complete Profile</div>
+          <div class="earn-sub">One-time +30 coins</div>
+          <button class="btn-claim btn-full" id="profileBtn">Complete</button>
+        </div>
+      </div>
+
+      <div class="page-head" style="margin-top:24px;">
+        <h1 style="font-size:1.2rem;">Achievement Badges</h1>
+        <p>One-time bonuses as your total earnings grow.</p>
+      </div>
+      <div id="badgesList" class="queue"></div>
+    </section>
+
+    <!-- profile completion modal -->
+    <div id="profileModalBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:60; align-items:center; justify-content:center; padding:20px;">
+      <div style="background:var(--surface); border-radius:16px; padding:26px; max-width:360px; width:100%;">
+        <h3 style="margin-bottom:4px;">Complete your profile</h3>
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:18px;">Earn +30 coins, one-time.</p>
+        <div class="field"><label>Date of birth</label><input type="date" id="dobInput"></div>
+        <div class="field">
+          <label>Gender</label>
+          <select id="genderInput" style="width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface-alt); font-size:0.92rem;">
+            <option value="">Select…</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="auth-error" id="profileError"></div>
+        <button class="btn-claim btn-full" id="profileSubmitBtn">Save & Claim</button>
+        <button class="btn-ghost btn-full" id="profileCancelBtn" style="margin-top:8px;">Cancel</button>
+      </div>
+    </div>
+
+    <section id="page-wallet" class="page">
+      <div class="page-head"><h1>Wallet</h1><p>Your balance, conversion rate, and withdrawal.</p></div>
+      <div class="withdraw-card">
+        <div>
+          <div style="font-size:1.3rem; font-weight:700;" class="mono"><span id="withdrawAvailable">₹0.00</span> available</div>
+          <div class="rate" id="withdrawRateText">100 coins = ₹1.00 · Minimum withdrawal ₹50.00</div>
+        </div>
+        <button class="btn-claim" id="withdrawBtn" disabled>Request Withdrawal</button>
+      </div>
+      <h2 style="font-size:1.1rem; margin-bottom:14px;">History</h2>
+      <table>
+        <thead><tr><th>Ad</th><th>Time</th><th>Coins</th></tr></thead>
+        <tbody id="historyBody"><tr><td colspan="3" style="color:var(--text-dim);">Loading…</td></tr></tbody>
+      </table>
+      <div class="note">Withdrawals are approved manually by the admin until an automated payout API (RazorpayX, business KYC required) is connected.</div>
+    </section>
+
+    <section id="page-tasks" class="page">
+      <div class="page-head">
+        <h1>Tasks</h1>
+        <p>Higher-paying tasks — sign up for an app, try a service, complete a survey. Pays much more than watching an ad.</p>
+      </div>
+      <div id="tasksWallWrap">
+        <div class="loading-block">
+          <span class="spinner dark"></span>
+          <span>Loading tasks…</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-refer" class="page">
+      <div class="page-head"><h1>Refer & Earn</h1><p>Invite friends and earn bonus coins together.</p></div>
+      <div class="status-card">
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:12px;">
+          Share your code — when a friend signs up and verifies their email, you both get <span id="referralBonusText">50</span> bonus coins.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <div class="mono" id="referralCodeText" style="flex:1; background:var(--surface-alt); border:1px solid var(--line); border-radius:8px; padding:12px 14px; font-weight:700; font-size:1.15rem; letter-spacing:0.05em; text-align:center;">—</div>
+          <button class="btn-claim" id="copyReferralBtn" style="flex-shrink:0;">Copy Link</button>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:14px;">Friends referred so far: <b id="referralCountText" style="color:var(--text);">0</b></p>
+      </div>
+      <div class="note">Share your code on WhatsApp, Telegram, or anywhere — anyone who signs up with it counts toward your referral bonus.</div>
+    </section>
+
+    <section id="page-more" class="page">
+      <div class="page-head"><h1>More</h1></div>
+
+      <div class="premium-banner" onclick="document.getElementById('premiumSection').scrollIntoView({behavior:'smooth'})">
+        <div class="pb-ic">👑</div>
+        <div style="flex:1;">
+          <div class="pb-title">Go Premium</div>
+          <div class="pb-sub">2x rewards · Priority payouts</div>
+        </div>
+        <div style="color:#fff; font-size:1.2rem;">›</div>
+      </div>
+
+      <div class="page-head" style="margin-top:20px;"><h1 style="font-size:1.1rem;">Leaderboard</h1><p>Today's top 10 earners.</p></div>
+      <div id="leaderboardList"></div>
+      <div id="leaderboardFootnote" class="lb-footnote" style="display:none;"></div>
+
+      <div class="page-head" style="margin-top:28px;" id="premiumSection"><h1 style="font-size:1.1rem;">Premium</h1></div>
+      <div class="plan-compare">
+        <div class="plan-card" id="freeCard">
+          <div class="ptitle">Free</div><div class="pprice">₹0 / month</div>
+          <ul><li>Standard rewards</li><li>Standard payout speed</li><li>Leaderboard access</li></ul>
+          <button class="btn-ghost" id="currentPlanBtnFree" disabled>Current Plan</button>
+        </div>
+        <div class="plan-card highlight" id="premiumCard">
+          <div class="ptitle">Premium</div><div class="pprice">₹99 / month</div>
+          <ul><li>2x rewards on tasks, spin & scratch</li><li>Priority payout</li><li>Premium badge on leaderboard</li></ul>
+          <button class="btn-premium" id="upgradeBtn">Upgrade to Premium</button>
+        </div>
+      </div>
+      <div class="note">Payment is processed by Razorpay. In test mode, use Razorpay's test card numbers — no real money moves until you switch to live keys.</div>
+
+      <div class="page-head" style="margin-top:28px;"><h1 style="font-size:1.1rem;">Account</h1></div>
+      <div class="status-card" style="margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:var(--text-dim); font-size:0.85rem;">Name</span><span id="settingsName" style="font-weight:600; font-size:0.85rem;">—</span></div>
+        <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);"><span style="color:var(--text-dim); font-size:0.85rem;">Email</span><span id="settingsEmail" style="font-weight:600; font-size:0.85rem;">—</span></div>
+        <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);"><span style="color:var(--text-dim); font-size:0.85rem;">Plan</span><span id="settingsPlan" style="font-weight:600; font-size:0.85rem;">Free</span></div>
+      </div>
+      <button class="btn-ghost btn-full" id="changePwBtn" style="margin-bottom:10px;">Change Password</button>
+      <button class="btn-ghost btn-full" id="moreLogoutBtn">Log out</button>
+    </section>
+
+    <!-- change password modal -->
+    <div id="pwModalBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:60; align-items:center; justify-content:center; padding:20px;">
+      <div style="background:var(--surface); border-radius:16px; padding:26px; max-width:360px; width:100%;">
+        <h3 style="margin-bottom:16px;">Change password</h3>
+        <div class="field"><label>Current password</label><input type="password" id="curPwInput"></div>
+        <div class="field"><label>New password</label><input type="password" id="newPwInput"></div>
+        <div class="auth-error" id="pwError"></div>
+        <button class="btn-claim btn-full" id="pwSubmitBtn">Update Password</button>
+        <button class="btn-ghost btn-full" id="pwCancelBtn" style="margin-top:8px;">Cancel</button>
+      </div>
+    </div>
+
+  </main>
+
+  <nav class="tabbar">
+    <div class="tabbar-inner">
+      <button class="tab-btn active" data-page="dashboard"><span class="ic">🏠</span>Home</button>
+      <button class="tab-btn" data-page="tasks"><span class="ic">🎯</span>Tasks</button>
+      <button class="tab-btn" data-page="wallet"><span class="ic">👛</span>Wallet</button>
+      <button class="tab-btn" data-page="refer"><span class="ic">🎁</span>Refer</button>
+      <button class="tab-btn" data-page="more"><span class="ic">⋯</span>More</button>
+    </div>
+  </nav>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const el = (id) => document.getElementById(id);
+  // Same-origin path — works because this file is now served by the same backend.
+  let API_BASE = '/api';
+  let authToken = localStorage.getItem('earnyday_token') || null;
+  let isSignupMode = false;
+  let isPremium = false;
+
+  // ---------- API helper ----------
+  async function api(path, options = {}) {
+    const res = await fetch(API_BASE + path, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: 'Bearer ' + authToken } : {}),
+        ...(options.headers || {}),
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
+  }
+
+  // ---------- auth screen ----------
+  // ---------- password show/hide ----------
+  el('pwToggleBtn').addEventListener('click', () => {
+    const input = el('passwordInput');
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    el('pwToggleBtn').textContent = showing ? 'Show' : 'Hide';
+  });
+
+  let pendingEmail = ''; // email waiting on OTP verification
+
+  function showAuthScreen() {
+    el('otpScreen').style.display = 'none';
+    el('authScreen').style.display = 'flex';
+  }
+  function showOtpScreen(email) {
+    pendingEmail = email;
+    el('otpEmailDisplay').textContent = email;
+    el('otpError').textContent = '';
+    el('otpInput').value = '';
+    el('authScreen').style.display = 'none';
+    el('otpScreen').style.display = 'flex';
+  }
+
+  el('authSwitchLink').addEventListener('click', () => {
+    isSignupMode = !isSignupMode;
+    el('authTitle').textContent = isSignupMode ? 'Sign up' : 'Log in';
+    el('authSub').textContent = isSignupMode ? 'Create an account to start earning.' : 'Welcome back — watch ads, earn coins.';
+    el('authSubmitBtn').textContent = isSignupMode ? 'Sign up' : 'Log in';
+    el('nameField').style.display = isSignupMode ? 'block' : 'none';
+    el('authSwitchText').textContent = isSignupMode ? 'Already have an account?' : "Don't have an account?";
+    el('authSwitchLink').textContent = isSignupMode ? 'Log in' : 'Sign up';
+    el('authError').textContent = '';
+  });
+
+  el('authSubmitBtn').addEventListener('click', async () => {
+    const email = el('emailInput').value.trim();
+    const password = el('passwordInput').value;
+    const name = el('nameInput').value.trim();
+    el('authError').textContent = '';
+
+    const btn = el('authSubmitBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="spinner"></span> Connecting…';
+
+    try {
+      if (isSignupMode) {
+        const refCode = new URLSearchParams(window.location.search).get('ref');
+        const data = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ name, email, password, ref: refCode }) });
+        showOtpScreen(data.email || email);
+      } else {
+        const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+        if (data.needsVerification) { showOtpScreen(email); return; }
+        authToken = data.token;
+        localStorage.setItem('earnyday_token', authToken);
+        await enterApp(data.user.name);
+      }
+    } catch (err) {
+      el('authError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = originalLabel;
+    }
+  });
+
+  el('otpSubmitBtn').addEventListener('click', async () => {
+    const otp = el('otpInput').value.trim();
+    el('otpError').textContent = '';
+    const btn = el('otpSubmitBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="spinner"></span> Verifying…';
+    try {
+      const data = await api('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail, otp }) });
+      authToken = data.token;
+      localStorage.setItem('earnyday_token', authToken);
+      await enterApp(data.user.name);
+    } catch (err) {
+      el('otpError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = originalLabel;
+    }
+  });
+
+  function attachResendHandler() {
+    const link = document.getElementById('resendOtpLink');
+    if (link) link.addEventListener('click', resendOtpHandler);
+  }
+
+  async function resendOtpHandler() {
+    try {
+      await api('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail }) });
+      el('otpError').textContent = '';
+      const row = el('resendRow');
+      row.classList.add('disabled');
+      let secs = 30;
+      row.innerHTML = `Didn't get a code? <a>Resend in ${secs}s</a>`;
+      const tick = setInterval(() => {
+        secs -= 1;
+        if (secs <= 0) {
+          clearInterval(tick);
+          row.classList.remove('disabled');
+          row.innerHTML = `Didn't get a code? <a id="resendOtpLink">Resend code</a>`;
+          attachResendHandler();
+        } else {
+          row.innerHTML = `Didn't get a code? <a>Resend in ${secs}s</a>`;
+        }
+      }, 1000);
+    } catch (err) {
+      el('otpError').textContent = err.message;
+    }
+  }
+  attachResendHandler();
+
+  async function enterApp(name) {
+    el('welcomeName').textContent = 'Welcome, ' + name;
+    el('otpScreen').style.display = 'none';
+    el('authScreen').style.display = 'none';
+    el('app').style.display = 'block';
+    await refreshEverything();
+  }
+
+  function doLogout() {
+    authToken = null;
+    localStorage.removeItem('earnyday_token');
+    el('app').style.display = 'none';
+    showAuthScreen();
+  }
+  el('logoutBtn').addEventListener('click', doLogout);
+  el('moreLogoutBtn').addEventListener('click', doLogout);
+
+  el('changePwBtn').addEventListener('click', () => {
+    el('curPwInput').value = ''; el('newPwInput').value = ''; el('pwError').textContent = '';
+    el('pwModalBg').style.display = 'flex';
+  });
+  el('pwCancelBtn').addEventListener('click', () => { el('pwModalBg').style.display = 'none'; });
+  el('pwSubmitBtn').addEventListener('click', async () => {
+    const currentPassword = el('curPwInput').value;
+    const newPassword = el('newPwInput').value;
+    el('pwError').textContent = '';
+    if (!currentPassword || !newPassword) { el('pwError').textContent = 'Please fill in both fields.'; return; }
+    try {
+      await api('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+      el('pwModalBg').style.display = 'none';
+      showToast('Password updated successfully.');
+    } catch (err) { el('pwError').textContent = err.message; }
+  });
+
+  // ---------- tab navigation ----------
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      el('page-' + btn.dataset.page).classList.add('active');
+      if (btn.dataset.page === 'more') loadLeaderboard();
+      if (btn.dataset.page === 'tasks') loadTasksWall();
+      if (btn.dataset.page === 'wallet') loadHistory();
+    });
+  });
+
+  window.goToPremium = function () {
+    document.querySelector('.tab-btn[data-page="more"]').click();
+    setTimeout(() => document.getElementById('premiumSection').scrollIntoView({ behavior: 'smooth' }), 200);
+  };
+
+  // ---------- wallet + history ----------
+  // ---------- extra earning features ----------
+  const SPIN_SEGMENTS = [2, 5, 10, 5, 20, 10, 50, 15]; // must visually match backend SPIN_REWARDS set
+  const SPIN_COLORS = ['#0f6b5c', '#4c4fe0', '#a8751f', '#0f6b5c', '#4c4fe0', '#a8751f', '#0f6b5c', '#4c4fe0'];
+  let spinRotation = 0;
+
+  function drawSpinWheel() {
+    const canvas = el('spinCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2, cy = canvas.height / 2, r = cx - 6;
+    const seg = (2 * Math.PI) / SPIN_SEGMENTS.length;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(spinRotation);
+    SPIN_SEGMENTS.forEach((val, i) => {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r, i * seg, (i + 1) * seg);
+      ctx.closePath();
+      ctx.fillStyle = SPIN_COLORS[i % SPIN_COLORS.length];
+      ctx.fill();
+      ctx.save();
+      ctx.rotate(i * seg + seg / 2);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 15px Inter, sans-serif';
+      ctx.fillText(val, r - 14, 5);
+      ctx.restore();
+    });
+    ctx.restore();
+    // pointer
+    ctx.beginPath();
+    ctx.moveTo(cx - 10, 4);
+    ctx.lineTo(cx + 10, 4);
+    ctx.lineTo(cx, 24);
+    ctx.closePath();
+    ctx.fillStyle = 'var(--text)'.startsWith('var') ? '#101828' : '#101828';
+    ctx.fill();
+  }
+
+  function drawScratchCanvas() {
+    const canvas = el('scratchCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#c7ccd6';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#8d93a8';
+    ctx.font = '13px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Scratch here ✦', canvas.width / 2, canvas.height / 2 + 4);
+  }
+
+  function setupScratchInteraction(onRevealed) {
+    const canvas = el('scratchCanvas');
+    const ctx = canvas.getContext('2d');
+    let scratching = false, revealed = false;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return { x: (p.clientX - rect.left) * (canvas.width / rect.width), y: (p.clientY - rect.top) * (canvas.height / rect.height) };
+    }
+    function scratchAt(x, y) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      ctx.arc(x, y, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    function checkRevealed() {
+      if (revealed) return;
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let cleared = 0;
+      for (let i = 3; i < data.length; i += 4 * 40) if (data[i] === 0) cleared++;
+      if (cleared / (data.length / (4 * 40)) > 0.45) { revealed = true; onRevealed(); }
+    }
+    const start = (e) => { scratching = true; const p = getPos(e); scratchAt(p.x, p.y); };
+    const move = (e) => { if (!scratching) return; e.preventDefault(); const p = getPos(e); scratchAt(p.x, p.y); checkRevealed(); };
+    const end = () => { scratching = false; };
+    canvas.onmousedown = start; canvas.onmousemove = move; canvas.onmouseup = end; canvas.onmouseleave = end;
+    canvas.ontouchstart = start; canvas.ontouchmove = move; canvas.ontouchend = end;
+  }
+
+  async function loadEarnStatus() {
+    try {
+      const s = await api('/earn/status');
+
+      // check-in row (7 days)
+      const row = el('checkinRow');
+      const rewards = [5, 8, 10, 12, 15, 20, 40];
+      row.innerHTML = rewards.map((r, i) => {
+        const dayNum = i + 1;
+        const done = dayNum <= s.checkinStreak;
+        const isToday = dayNum === s.checkinStreak + 1 && s.canCheckin;
+        const cls = done ? 'done' : isToday ? 'today' : 'locked';
+        return `<div class="checkin-day ${cls}">
+          <div class="cd-label">Day ${dayNum}</div>
+          <div class="cd-ic">${done ? '✅' : isToday ? '🎁' : '🔒'}</div>
+          <div class="cd-coin">+${r}</div>
+        </div>`;
+      }).join('');
+      el('checkinBtn').disabled = !s.canCheckin;
+      el('checkinBtn').textContent = s.canCheckin ? 'Check In' : 'Come back tomorrow';
+
+      el('spinBtn').disabled = !s.canSpin;
+      el('spinBtn').textContent = s.canSpin ? 'Spin' : 'Come back tomorrow';
+      drawSpinWheel();
+
+      el('scratchBtn').disabled = !s.canScratch;
+      el('scratchBtn').textContent = s.canScratch ? 'New Scratch Card' : 'Come back tomorrow';
+      if (s.canScratch) { drawScratchCanvas(); el('scratchPrize').textContent = ''; }
+      else { el('scratchPrize').textContent = 'Come back tomorrow'; el('scratchCanvas').getContext('2d').clearRect(0,0,220,120); }
+
+      const profileCard = el('profileCard');
+      if (s.profileBonusPaid) {
+        profileCard.querySelector('.earn-sub').textContent = 'Claimed ✓';
+        el('profileBtn').disabled = true;
+        el('profileBtn').textContent = 'Claimed';
+      }
+
+      const badgesList = el('badgesList');
+      badgesList.innerHTML = s.badges.map(b => `
+        <div class="badge-row ${b.unlocked ? '' : 'locked'}">
+          <div class="badge-ic">${b.claimed ? '✅' : b.unlocked ? '🏅' : '🔒'}</div>
+          <div class="badge-info">
+            <div class="bt">${b.key}</div>
+            <div class="bs">${b.threshold.toLocaleString('en-IN')} total coins needed · +${b.coins} reward</div>
+          </div>
+          ${b.claimed ? '' : b.unlocked ? `<button class="btn-claim" onclick="claimBadge('${b.key}')">Claim</button>` : ''}
+        </div>`).join('');
+    } catch (err) { /* silent — non-critical section */ }
+  }
+
+  el('checkinBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/checkin', { method: 'POST' });
+      showToast(`+${r.coinsAwarded} coins! Streak: ${r.streak} day${r.streak === 1 ? '' : 's'}`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  });
+
+  let spinning = false;
+  el('spinBtn').addEventListener('click', async () => {
+    if (spinning) return;
+    spinning = true;
+    const originalLabel = el('spinBtn').textContent;
+    el('spinBtn').disabled = true;
+    try {
+      const r = await api('/earn/spin', { method: 'POST' });
+      // find a segment matching the (pre-premium-multiplier) reward — fall back to random if not found
+      const baseCoins = isPremium ? r.coinsAwarded / 2 : r.coinsAwarded;
+      let idx = SPIN_SEGMENTS.indexOf(baseCoins);
+      if (idx === -1) idx = Math.floor(Math.random() * SPIN_SEGMENTS.length);
+      const seg = (2 * Math.PI) / SPIN_SEGMENTS.length;
+      const targetAngle = (2 * Math.PI * 6) + (Math.PI * 1.5 - (idx * seg + seg / 2)); // 6 extra spins, land pointer (top) on segment idx
+      const startTime = performance.now();
+      const duration = 2600;
+      const startRotation = spinRotation;
+      function animateSpin(now) {
+        const t = Math.min(1, (now - startTime) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        spinRotation = startRotation + eased * targetAngle;
+        drawSpinWheel();
+        if (t < 1) requestAnimationFrame(animateSpin);
+        else {
+          showToast(`🎡 You won +${r.coinsAwarded} coins!`);
+          refreshWalletStats();
+          loadEarnStatus();
+          spinning = false;
+        }
+      }
+      requestAnimationFrame(animateSpin);
+    } catch (err) {
+      showToast(err.message);
+      el('spinBtn').disabled = false;
+      el('spinBtn').textContent = originalLabel;
+      spinning = false;
+    }
+  });
+
+  el('scratchBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/scratch', { method: 'POST' });
+      drawScratchCanvas();
+      el('scratchPrize').textContent = `+${r.coinsAwarded} coins`;
+      el('scratchBtn').disabled = true;
+      setupScratchInteraction(() => {
+        showToast(`🎫 Revealed +${r.coinsAwarded} coins!`);
+        refreshWalletStats();
+        loadEarnStatus();
+      });
+    } catch (err) { showToast(err.message); }
+  });
+
+  el('profileBtn').addEventListener('click', () => { el('profileModalBg').style.display = 'flex'; });
+  el('profileCancelBtn').addEventListener('click', () => { el('profileModalBg').style.display = 'none'; });
+  el('profileSubmitBtn').addEventListener('click', async () => {
+    const dob = el('dobInput').value;
+    const gender = el('genderInput').value;
+    el('profileError').textContent = '';
+    if (!dob || !gender) { el('profileError').textContent = 'Please fill in both fields.'; return; }
+    try {
+      const r = await api('/earn/complete-profile', { method: 'POST', body: JSON.stringify({ dob, gender }) });
+      el('profileModalBg').style.display = 'none';
+      showToast(`+${r.coinsAwarded} coins — profile completed!`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { el('profileError').textContent = err.message; }
+  });
+
+  window.claimBadge = async function (key) {
+    try {
+      const r = await api('/earn/claim-badge', { method: 'POST', body: JSON.stringify({ key }) });
+      showToast(`🏅 Badge claimed! +${r.coinsAwarded} coins`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  };
+
+  async function refreshWalletStats() {
+    const me = await api('/wallet/me');
+    el('walletBalance').textContent = me.wallet_coins;
+    el('statEarned').textContent = me.total_earned;
+    el('statINR').textContent = '₹' + me.walletInr.toFixed(2);
+    el('withdrawAvailable').textContent = '₹' + me.walletInr.toFixed(2);
+    el('withdrawBtn').disabled = me.walletInr < me.minWithdrawInr;
+    el('withdrawRateText').textContent = `Minimum withdrawal ₹${me.minWithdrawInr.toFixed(2)}`;
+    isPremium = !!me.is_premium;
+    renderPlanUI();
+    el('heroWalletInr').textContent = '₹' + me.walletInr.toFixed(2);
+    el('heroCoins').textContent = me.wallet_coins;
+    el('heroAdsWatched').textContent = me.total_earned;
+    el('settingsName').textContent = me.name;
+    el('settingsEmail').textContent = me.email;
+    el('settingsPlan').textContent = isPremium ? 'Premium' : 'Free';
+  }
+
+  async function loadReferralInfo() {
+    try {
+      const data = await api('/referral/me');
+      el('referralCodeText').textContent = data.referralCode || '—';
+      el('referralCountText').textContent = data.referredCount;
+      el('referralBonusText').textContent = data.bonusPerReferral;
+    } catch (err) { /* fails quietly — non-critical widget */ }
+  }
+  el('copyReferralBtn').addEventListener('click', async () => {
+    const code = el('referralCodeText').textContent;
+    if (code === '—') return;
+    const link = `${window.location.origin}/earny-day.html?ref=${code}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Referral link copied!');
+    } catch (err) {
+      showToast('Could not copy — long-press to copy manually: ' + link);
+    }
+  });
+
+  async function loadHistory() {
+    const rows = await api('/wallet/history');
+    const body = el('historyBody');
+    if (rows.length === 0) {
+      body.innerHTML = `<tr><td colspan="3" style="color:var(--text-dim);">No ads completed yet — head to the Ads tab to start.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const time = new Date(r.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      return `<tr><td>${r.ad_name}</td><td>${time}</td><td class="pos">+${r.coins}</td></tr>`;
+    }).join('');
+  }
+
+  el('withdrawBtn').addEventListener('click', async () => {
+    try {
+      const result = await api('/withdraw/request', { method: 'POST', body: JSON.stringify({}) });
+      showToast(`Withdrawal request sent for ₹${result.amountInr.toFixed(2)} — pending admin approval.`);
+      await refreshWalletStats();
+      loadHistory();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // ---------- leaderboard ----------
+  // ---------- tasks (CPA offerwall) ----------
+  let tasksLoaded = false;
+  async function loadTasksWall() {
+    if (tasksLoaded) return; // only need to load once per session
+    try {
+      const { url } = await api('/tasks/wall-url');
+      document.getElementById('tasksWallWrap').innerHTML =
+        `<iframe src="${url}" style="width:100%; min-height:70vh; border:1px solid var(--line); border-radius:12px; background:var(--surface);"></iframe>`;
+      tasksLoaded = true;
+    } catch (err) {
+      document.getElementById('tasksWallWrap').innerHTML = `
+        <div class="lock-card">
+          <div class="icon">🚧</div>
+          <h3>Tasks coming soon</h3>
+          <p>${err.message}</p>
+        </div>`;
+    }
+  }
+
+  async function loadLeaderboard() {
+    const data = await api('/leaderboard/top10');
+    const list = el('leaderboardList');
+    list.innerHTML = '';
+    data.top10.forEach((u, i) => {
+      const row = document.createElement('div');
+      row.className = 'lb-row' + (i === 0 ? ' top1' : i === 1 ? ' top2' : i === 2 ? ' top3' : '');
+      row.innerHTML = `
+        <div class="lb-rank">${i + 1}</div>
+        <div class="lb-avatar">${u.name[0]}</div>
+        <div class="lb-name">${u.name}</div>
+        <div class="lb-coins mono">${u.total_earned.toLocaleString('en-IN')}</div>`;
+      list.appendChild(row);
+    });
+
+    const footnote = el('leaderboardFootnote');
+    if (data.yourRank && data.yourRank > 10) {
+      footnote.style.display = 'block';
+      footnote.textContent = `You're currently #${data.yourRank} — watch more ads to break into today's top 10.`;
+    } else {
+      footnote.style.display = 'none';
+    }
+    el('statRank').textContent = data.yourRank ? (data.yourRank <= 10 ? '#' + data.yourRank + ' today' : 'Outside top 10') : 'Not ranked';
+    el('heroRank').textContent = data.yourRank ? '#' + data.yourRank : '—';
+  }
+
+  // ---------- premium (Razorpay) ----------
+  function renderPlanUI() {
+    el('upgradeBtn').textContent = isPremium ? 'You are Premium ✓' : 'Upgrade to Premium';
+    el('upgradeBtn').disabled = isPremium;
+    el('premiumCard').classList.toggle('highlight', !isPremium);
+  }
+
+  el('upgradeBtn').addEventListener('click', async () => {
+    if (isPremium) return;
+    try {
+      const { order, keyId } = await api('/payment/create-order', { method: 'POST' });
+      const rzp = new Razorpay({
+        key: keyId,
+         amount: order.amount,
+        currency: order.currency,
+        order_id: order.id,
+        name: 'Earny Day',
+        description: 'Premium subscription (2x rewards)',
+        handler: async function (response) {
+          try {
+            await api('/payment/verify', { method: 'POST', body: JSON.stringify(response) });
+            showToast('Premium unlocked — 2x rewards from now on!');
+            await refreshWalletStats();
+          } catch (err) {
+            showToast('Payment verification failed: ' + err.message);
+          }
+        },
+        theme: { color: '#0f6b5c' },
+      });
+      rzp.open();
+    } catch (err) {
+      showToast('Could not start payment: ' + err.message);
+    }
+  });
+
+  // ---------- toast ----------
+  function showToast(msg) {
+    const t = el('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  // ---------- init after login ----------
+  async function refreshEverything() {
+    await refreshWalletStats();
+    await loadHistory();
+    await loadReferralInfo();
+    await loadEarnStatus();
+    await loadNotifications();
+  }
+
+  // ---------- notifications ----------
+  function timeAgo(iso) {
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+  async function loadNotifications() {
+    try {
+      const rows = await api('/notifications');
+      el('notifDot').style.display = rows.length > 0 ? 'block' : 'none';
+      el('notifList').innerHTML = rows.length === 0
+        ? '<p style="color:var(--text-dim); font-size:0.85rem; text-align:center; margin-top:40px;">No notifications yet — start earning to see activity here.</p>'
+        : rows.map(r => `
+          <div class="notif-row">
+            <div class="ni">${r.icon}</div>
+            <div style="flex:1;">
+              <div class="nt">${r.title}</div>
+              <div class="ns">${r.subtitle || ''}</div>
+              <div class="nd">${timeAgo(r.created_at)}</div>
+            </div>
+          </div>`).join('');
+    } catch (err) { /* silent */ }
+  }
+  el('notifBtn').addEventListener('click', () => { el('notifPanelBg').style.display = 'flex'; });
+
+  // ---------- auto-login on page load if a saved session exists ----------
+  (async function initSession() {
+    if (!authToken) return; // no saved token — show login screen as normal
+    try {
+      const me = await api('/wallet/me'); // validates the token against the backend
+      el('welcomeName').textContent = 'Welcome, ' + me.name;
+      el('authScreen').style.display = 'none';
+      el('app').style.display = 'block';
+      await refreshEverything();
+    } catch (err) {
+      // token expired or invalid — clear it and fall back to the login screen
+      authToken = null;
+      localStorage.removeItem('earnyday_token');
+    }
+  })();
+</script>
+
+</body>
+</html>

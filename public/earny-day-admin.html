@@ -1,4 +1,4 @@
-          <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -78,7 +78,7 @@
     <h1>Admin Access</h1>
     <p>Enter your backend URL and admin key (set in the backend's .env file).</p>
     <div class="gate-error" id="gateError"></div>
-    <input type="text" id="apiBaseInput" value="http://localhost:4000/api" placeholder="Backend API URL">
+    <input type="text" id="apiBaseInput" value="https://earnyday-backend.onrender.com/api" placeholder="Backend API URL">
     <input type="password" id="adminKeyInput" placeholder="Admin key">
     <button style="width:100%;" id="gateBtn">Enter Dashboard</button>
   </div>
@@ -234,8 +234,8 @@
       await loadWithdrawals();
       await loadStats();
     } catch (err) {
-      alert(err.message);
-    }
+      alert(err.message);     
+              }
   };
 
   el('saveConfigBtn').addEventListener('click', async () => {

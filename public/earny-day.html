@@ -294,7 +294,6 @@
       </div>
     </div>
   </header>
-
   <!-- notifications panel -->
   
 <div id="notifPanelBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:70; justify-content:flex-end;" onclick="if(event.target===this) this.style.display='none';">
@@ -458,6 +457,37 @@
       <div class="note">Share your code on WhatsApp, Telegram, or anywhere — anyone who signs up with it counts toward your referral bonus.</div>
     </section>
 
+    <section id="page-tournament" class="page">
+      <div class="page-head"><h1>🏆 Tournaments</h1><p id="tourneyPrizeNote">Compete live · winner takes the coins.</p></div>
+
+      <div id="tourney-list">
+        <div id="tourneyGamesGrid" class="queue"></div>
+      </div>
+
+      <div id="tourney-wait" style="display:none; text-align:center; padding:48px 20px;">
+        <div class="spinner dark" style="width:32px;height:32px;border-width:3px;margin:0 auto 16px;"></div>
+        <h3 id="tourneyWaitCount">Waiting for players…</h3>
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-top:8px;">Match starts automatically once the room fills up.</p>
+        <button class="btn-ghost" style="margin-top:20px;" id="tourneyCancelBtn">Cancel</button>
+      </div>
+
+      <div id="tourney-play" style="display:none;">
+        <div class="status-card" style="display:flex; justify-content:space-between; align-items:center;">
+          <div>Score: <span id="tourneyScore" class="mono" style="font-weight:700;">0</span></div>
+          <div>⏱ <span id="tourneyTimer" class="mono" style="font-weight:700;">240</span>s</div>
+        </div>
+        <div id="tourneyGameArea"></div>
+      </div>
+
+      <div id="tourney-result" style="display:none;">
+        <div class="status-card" style="text-align:center;">
+          <h3 id="tourneyResultHead">Calculating result…</h3>
+        </div>
+        <div id="tourneyResultBoard" style="display:flex; flex-direction:column; gap:8px; margin-top:14px;"></div>
+        <button class="btn-claim btn-full" style="margin-top:16px;" id="tourneyPlayAgainBtn">Back to games</button>
+      </div>
+    </section>
+
     <section id="page-more" class="page">
       <div class="page-head"><h1>More</h1></div>
 
@@ -519,6 +549,7 @@
       <button class="tab-btn" data-page="tasks"><span class="ic">🎯</span>Tasks</button>
       <button class="tab-btn" data-page="wallet"><span class="ic">👛</span>Wallet</button>
       <button class="tab-btn" data-page="refer"><span class="ic">🎁</span>Refer</button>
+      <button class="tab-btn" data-page="tournament"><span class="ic">🏆</span>Tourney</button>
       <button class="tab-btn" data-page="more"><span class="ic">⋯</span>More</button>
     </div>
   </nav>
@@ -713,8 +744,381 @@
       if (btn.dataset.page === 'more') loadLeaderboard();
       if (btn.dataset.page === 'tasks') loadTasksWall();
       if (btn.dataset.page === 'wallet') loadHistory();
+      if (btn.dataset.page === 'tournament') loadTourneyGames();
     });
   });
+
+  // ============================================================
+  // TOURNAMENTS
+  // ============================================================
+  let tState = { tournamentId: null, gameKey: null, pollTimer: null, gameTimer: null, score: 0, timeLeft: 0 };
+
+  function showTourneyView(view) {
+    ['list', 'wait', 'play', 'result'].forEach(v => {
+      el('tourney-' + v).style.display = (v === view) ? 'block' : 'none';
+    });
+  }
+
+  async function loadTourneyGames() {
+    try {
+      const data = await api('/tournament/games');
+      el('tourneyPrizeNote').textContent = `Winner gets ${data.prizeCoins} coins · ${Math.round(data.durationSeconds / 60)} min matches`;
+      el('tourneyGamesGrid').innerHTML = data.games.map(g => `
+        <div class="ad-card">
+          <div class="ad-thumb">${g.icon}</div>
+          <div class="ad-info">
+            <div class="name">${g.name}</div>
+            <div class="meta">${g.playerCount}/${g.maxPlayers} joined${g.status === 'active' ? ' · match in progress' : ''}</div>
+          </div>
+          <div class="ad-action">
+            <button class="btn-claim" onclick="joinTournament('${g.key}')" ${g.status === 'active' ? 'disabled' : ''}>${g.status === 'active' ? 'Full' : 'Join'}</button>
+          </div>
+        </div>`).join('');
+      showTourneyView('list');
+    } catch (err) { showToast(err.message); }
+  }
+
+  window.joinTournament = async function (gameKey) {
+    try {
+      const data = await api('/tournament/join', { method: 'POST', body: JSON.stringify({ gameKey }) });
+      tState.tournamentId = data.tournament.id;
+      tState.gameKey = gameKey;
+      el('tourneyWaitCount').textContent = `${data.playerCount}/${data.tournament.max_players} joined`;
+      if (data.tournament.status === 'active') {
+        startTourneyGame(Math.round((new Date(data.tournament.ends_at) - Date.now()) / 1000));
+      } else {
+        showTourneyView('wait');
+        pollTourneyStatus();
+      }
+    } catch (err) { showToast(err.message); }
+  };
+
+  function pollTourneyStatus() {
+    clearInterval(tState.pollTimer);
+    tState.pollTimer = setInterval(async () => {
+      try {
+        const data = await api(`/tournament/${tState.tournamentId}/status`);
+        el('tourneyWaitCount').textContent = `${data.playerCount}/${data.tournament.max_players} joined`;
+        if (data.tournament.status === 'active') {
+          clearInterval(tState.pollTimer);
+          startTourneyGame(data.secondsLeft);
+        }
+      } catch (err) { /* silent */ }
+    }, 3000);
+  }
+
+  el('tourneyCancelBtn').addEventListener('click', () => {
+    clearInterval(tState.pollTimer);
+    loadTourneyGames();
+  });
+  el('tourneyPlayAgainBtn').addEventListener('click', () => {
+    clearInterval(tState.pollTimer);
+    loadTourneyGames();
+  });
+
+  function startTourneyGame(secondsLeft) {
+    showTourneyView('play');
+    tState.score = 0;
+    tState.timeLeft = secondsLeft && secondsLeft > 0 ? secondsLeft : 240;
+    el('tourneyScore').textContent = '0';
+    el('tourneyTimer').textContent = tState.timeLeft;
+    initMiniGame(tState.gameKey);
+    clearInterval(tState.gameTimer);
+    tState.gameTimer = setInterval(() => {
+      tState.timeLeft--;
+      el('tourneyTimer').textContent = tState.timeLeft;
+      if (tState.timeLeft <= 0) {
+        clearInterval(tState.gameTimer);
+        finishTourneyGame();
+      }
+    }, 1000);
+  }
+
+  function addTourneyScore(points) {
+    tState.score += points;
+    el('tourneyScore').textContent = tState.score;
+  }
+
+  async function finishTourneyGame() {
+    clearInterval(tState.gameTimer);
+    el('tourneyGameArea').innerHTML = '<p style="text-align:center; color:var(--text-dim); padding:30px 0;">Time up! Submitting your score…</p>';
+    try {
+      await api(`/tournament/${tState.tournamentId}/submit-score`, { method: 'POST', body: JSON.stringify({ score: tState.score }) });
+    } catch (err) { /* may already be submitted */ }
+    showTourneyView('result');
+    pollTourneyResult();
+  }
+
+  async function pollTourneyResult() {
+    clearInterval(tState.pollTimer);
+    const check = async () => {
+      try {
+        const data = await api(`/tournament/${tState.tournamentId}/leaderboard`);
+        const board = data.board;
+        el('tourneyResultBoard').innerHTML = board.map((p, i) => `
+          <div class="lb-row${i === 0 ? ' top1' : i === 1 ? ' top2' : i === 2 ? ' top3' : ''}">
+            <div class="lb-rank">${i + 1}</div>
+            <div class="lb-name">${p.name}${p.submitted ? '' : ' (still playing…)'}</div>
+            <div class="lb-coins mono">${p.score}</div>
+          </div>`).join('');
+        if (data.tournament.status === 'finished') {
+          clearInterval(tState.pollTimer);
+          const winner = board[0];
+          el('tourneyResultHead').textContent = winner ? `🏆 ${winner.name} won ${data.tournament.prize_coins} coins!` : 'Tournament finished';
+          await refreshWalletStats();
+        }
+      } catch (err) { /* silent */ }
+    };
+    await check();
+    tState.pollTimer = setInterval(check, 4000);
+  }
+
+  // ---------- mini-game engines ----------
+  function initMiniGame(key) {
+    const area = el('tourneyGameArea');
+    if (key === 'math_sprint') return initMathSprint(area);
+    if (key === 'word_scramble') return initWordScramble(area);
+    if (key === 'memory_sequence') return initMemorySequence(area);
+    if (key === 'reaction_time') return initReactionTime(area);
+    if (key === 'quiz_marathon') return initQuizMarathon(area);
+    if (key === 'pattern_match') return initPatternMatch(area);
+    if (key === 'number_guess') return initNumberGuess(area);
+    if (key === 'aim_tap') return initAimTap(area);
+  }
+
+  function initMathSprint(area) {
+    area.innerHTML = `
+      <div style="text-align:center; padding:20px 0;">
+        <div id="msQuestion" style="font-size:2rem; font-weight:700; margin-bottom:20px;"></div>
+        <input id="msInput" type="number" inputmode="numeric" style="width:140px; text-align:center; font-size:1.3rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);" placeholder="Answer">
+        <br><button class="btn-claim" style="margin-top:14px;" id="msSubmit">Submit</button>
+      </div>`;
+    function newQ() {
+      const a = Math.floor(Math.random() * 50) + 1, b = Math.floor(Math.random() * 50) + 1;
+      const ops = ['+', '-', '×'];
+      const op = ops[Math.floor(Math.random() * ops.length)];
+      const answer = op === '+' ? a + b : op === '-' ? a - b : a * b;
+      area.dataset.answer = answer;
+      el('msQuestion').textContent = `${a} ${op} ${b} = ?`;
+      el('msInput').value = '';
+    }
+    newQ();
+    el('msSubmit').addEventListener('click', () => {
+      const val = parseInt(el('msInput').value, 10);
+      if (val === parseInt(area.dataset.answer, 10)) addTourneyScore(10);
+      newQ();
+      el('msInput').focus();
+    });
+    el('msInput').addEventListener('keydown', e => { if (e.key === 'Enter') el('msSubmit').click(); });
+  }
+
+  const WORD_LIST = ['APPLE', 'TIGER', 'PLANET', 'SILVER', 'BRIDGE', 'FLOWER', 'CASTLE', 'DRAGON', 'PENCIL', 'ORANGE', 'WINTER', 'GUITAR', 'ISLAND', 'ROCKET', 'PUZZLE'];
+  function scrambleWord(word) {
+    const arr = word.split('');
+    for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[arr[i], arr[j]] = [arr[j], arr[i]]; }
+    const result = arr.join('');
+    return result === word ? scrambleWord(word) : result;
+  }
+  function initWordScramble(area) {
+    area.innerHTML = `
+      <div style="text-align:center; padding:20px 0;">
+        <div id="wsScrambled" style="font-size:1.8rem; font-weight:700; letter-spacing:4px; margin-bottom:20px;"></div>
+        <input id="wsInput" type="text" style="width:180px; text-align:center; text-transform:uppercase; font-size:1.2rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);" placeholder="Your guess">
+        <br><button class="btn-claim" style="margin-top:14px;" id="wsSubmit">Submit</button>
+      </div>`;
+    function newWord() {
+      const word = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
+      area.dataset.answer = word;
+      el('wsScrambled').textContent = scrambleWord(word);
+      el('wsInput').value = '';
+    }
+    newWord();
+    el('wsSubmit').addEventListener('click', () => {
+      const val = el('wsInput').value.trim().toUpperCase();
+      if (val === area.dataset.answer) addTourneyScore(15);
+      newWord();
+      el('wsInput').focus();
+    });
+    el('wsInput').addEventListener('keydown', e => { if (e.key === 'Enter') el('wsSubmit').click(); });
+  }
+
+  function initMemorySequence(area) {
+    const colors = ['#f5a623', '#8b5cf6', '#22c55e', '#ef4444'];
+    let sequence = [Math.floor(Math.random() * 4)], userStep = 0, level = 1, showing = false;
+    area.innerHTML = `
+      <div style="text-align:center; padding:10px 0;">
+        <div id="memLevel" style="color:var(--text-dim); margin-bottom:10px;">Level 1 — watch the sequence</div>
+        <div id="memGrid" style="display:grid; grid-template-columns:repeat(2,80px); gap:10px; justify-content:center;">
+          ${colors.map((c, i) => `<button data-i="${i}" style="width:80px;height:80px;border-radius:12px;background:${c};opacity:0.5;border:none;"></button>`).join('')}
+        </div>
+      </div>`;
+    function flash(i, cb) {
+      const btn = area.querySelector(`[data-i="${i}"]`);
+      btn.style.opacity = '1';
+      setTimeout(() => { btn.style.opacity = '0.5'; cb && cb(); }, 400);
+    }
+    function playSequence() {
+      showing = true;
+      let i = 0;
+      const step = () => {
+        if (i >= sequence.length) { showing = false; return; }
+        flash(sequence[i], () => { i++; setTimeout(step, 200); });
+      };
+      step();
+    }
+    function nextLevel() {
+      level++;
+      sequence.push(Math.floor(Math.random() * 4));
+      userStep = 0;
+      el('memLevel').textContent = 'Level ' + level + ' — watch the sequence';
+      setTimeout(playSequence, 600);
+    }
+    area.querySelectorAll('#memGrid button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (showing) return;
+        const i = parseInt(btn.dataset.i, 10);
+        if (sequence[userStep] === i) {
+          userStep++;
+          if (userStep === sequence.length) { addTourneyScore(level * 5); nextLevel(); }
+        } else {
+          sequence = [Math.floor(Math.random() * 4)]; level = 1; userStep = 0;
+          el('memLevel').textContent = 'Missed! Restarting at level 1';
+          setTimeout(playSequence, 800);
+        }
+      });
+    });
+    setTimeout(playSequence, 500);
+  }
+  function initReactionTime(area) {
+    let waitTimeout, startTime, waiting = false;
+    area.innerHTML = `
+      <div id="reactBox" style="height:220px; border-radius:16px; background:var(--surface-alt); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.1rem; cursor:pointer; text-align:center; padding:0 20px;">Tap here to start</div>
+      <p style="text-align:center; color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Wait for green, then tap as fast as you can.</p>`;
+    const box = el('reactBox');
+    function armRound() {
+      box.style.background = 'var(--surface-alt)';
+      box.textContent = 'Wait for green…';
+      waiting = false;
+      waitTimeout = setTimeout(() => {
+        waiting = true;
+        startTime = Date.now();
+        box.style.background = '#22c55e';
+        box.textContent = 'TAP NOW!';
+      }, 1000 + Math.random() * 2500);
+    }
+    box.addEventListener('click', () => {
+      if (box.textContent === 'Tap here to start') { armRound(); return; }
+      if (!waiting) {
+        clearTimeout(waitTimeout);
+        box.style.background = '#ef4444';
+        box.textContent = 'Too soon! Tap to retry';
+        return;
+      }
+      const ms = Date.now() - startTime;
+      const points = Math.max(1, Math.round(30 - ms / 40));
+      addTourneyScore(points);
+      box.textContent = `${ms}ms · +${points} pts — tap to go again`;
+      box.style.background = 'var(--surface-alt)';
+      waiting = false;
+      setTimeout(armRound, 900);
+    });
+  }
+
+  const QUIZ_BANK = [
+    { q: 'Capital of France?', options: ['Paris', 'Rome', 'Berlin', 'Madrid'], a: 0 },
+    { q: '2 + 2 × 2 = ?', options: ['6', '8', '4', '2'], a: 0 },
+    { q: 'Largest planet?', options: ['Earth', 'Mars', 'Jupiter', 'Venus'], a: 2 },
+    { q: 'H2O is commonly known as?', options: ['Salt', 'Water', 'Sugar', 'Oxygen'], a: 1 },
+    { q: 'Fastest land animal?', options: ['Lion', 'Cheetah', 'Horse', 'Tiger'], a: 1 },
+    { q: "India's capital?", options: ['Mumbai', 'Delhi', 'Chennai', 'Pune'], a: 1 },
+    { q: 'Number of continents?', options: ['5', '6', '7', '8'], a: 2 },
+  ];
+  function initQuizMarathon(area) {
+    function newQ() {
+      const item = QUIZ_BANK[Math.floor(Math.random() * QUIZ_BANK.length)];
+      area.dataset.answer = item.a;
+      area.innerHTML = `
+        <div style="text-align:center; padding:10px 0;">
+          <div style="font-size:1.2rem; font-weight:700; margin-bottom:16px;">${item.q}</div>
+          <div style="display:flex; flex-direction:column; gap:10px; max-width:280px; margin:0 auto;">
+            ${item.options.map((o, i) => `<button class="btn-ghost quiz-opt" data-i="${i}">${o}</button>`).join('')}
+          </div>
+        </div>`;
+      area.querySelectorAll('.quiz-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (parseInt(btn.dataset.i, 10) === parseInt(area.dataset.answer, 10)) addTourneyScore(10);
+          newQ();
+        });
+      });
+    }
+    newQ();
+  }
+
+  function initPatternMatch(area) {
+    const shapes = ['🔴', '🔵', '🟢', '🟡', '🟣', '🟠'];
+    function newRound() {
+      const target = shapes[Math.floor(Math.random() * shapes.length)];
+      const options = new Set([target]);
+      while (options.size < 4) options.add(shapes[Math.floor(Math.random() * shapes.length)]);
+      const optArr = Array.from(options).sort(() => Math.random() - 0.5);
+      area.innerHTML = `
+        <div style="text-align:center; padding:10px 0;">
+          <p style="color:var(--text-dim); margin-bottom:10px;">Tap the matching shape:</p>
+          <div style="font-size:3rem; margin-bottom:20px;">${target}</div>
+          <div style="display:flex; gap:12px; justify-content:center;">
+            ${optArr.map(s => `<button class="btn-ghost pm-opt" style="font-size:1.6rem;" data-s="${s}">${s}</button>`).join('')}
+          </div>
+        </div>`;
+      area.querySelectorAll('.pm-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.s === target) addTourneyScore(8);
+          newRound();
+        });
+      });
+    }
+    newRound();
+  }
+
+  function initNumberGuess(area) {
+    function newRound() {
+      const secret = Math.floor(Math.random() * 100) + 1;
+      area.dataset.secret = secret;
+      area.innerHTML = `
+        <div style="text-align:center; padding:20px 0;">
+          <p style="color:var(--text-dim); margin-bottom:14px;">Guess a number between 1–100. Closer guesses score more.</p>
+          <input id="ngInput" type="number" min="1" max="100" style="width:120px; text-align:center; font-size:1.3rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);">
+          <br><button class="btn-claim" style="margin-top:14px;" id="ngSubmit">Guess</button>
+          <p id="ngResult" style="margin-top:10px; color:var(--text-dim);"></p>
+        </div>`;
+      el('ngSubmit').addEventListener('click', () => {
+        const guess = parseInt(el('ngInput').value, 10);
+        if (isNaN(guess)) return;
+        const diff = Math.abs(guess - secret);
+        const points = Math.max(0, 20 - diff);
+        addTourneyScore(points);
+        el('ngResult').textContent = `Secret was ${secret} · +${points} pts`;
+        setTimeout(newRound, 900);
+      });
+    }
+    newRound();
+  }
+
+  function initAimTap(area) {
+    area.innerHTML = `<div id="aimArena" style="position:relative; height:260px; border-radius:16px; background:var(--surface-alt); overflow:hidden;"></div>`;
+    const arena = el('aimArena');
+    let target;
+    function spawnTarget() {
+      if (target) target.remove();
+      target = document.createElement('button');
+      target.style.cssText = 'position:absolute; width:44px; height:44px; border-radius:50%; background:var(--primary); border:none;';
+      const maxX = Math.max(10, arena.clientWidth - 44), maxY = Math.max(10, arena.clientHeight - 44);
+      target.style.left = Math.floor(Math.random() * maxX) + 'px';
+      target.style.top = Math.floor(Math.random() * maxY) + 'px';
+      target.addEventListener('click', () => { addTourneyScore(5); spawnTarget(); });
+      arena.appendChild(target);
+    }
+    spawnTarget();
+  }
 
   window.goToPremium = function () {
     document.querySelector('.tab-btn[data-page="more"]').click();

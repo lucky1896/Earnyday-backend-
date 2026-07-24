@@ -111,6 +111,7 @@ async function initDb() {
   if (rows.length === 0) {
     await pool.query('INSERT INTO config (id) VALUES (1)');
   }
+  await initTournamentTables();
 }
 
 async function getConfig() {
@@ -833,6 +834,229 @@ app.post('/api/admin/config', requireAdmin, async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not update config.' });
+  }
+});
+
+// ============================================================
+// TOURNAMENTS — 8 parallel skill-based games, 20 players/room
+// ============================================================
+
+const TOURNAMENT_GAMES = [
+  { key: 'math_sprint',     name: 'Math Sprint',     icon: '➕' },
+  { key: 'word_scramble',   name: 'Word Scramble',   icon: '🔤' },
+  { key: 'memory_sequence', name: 'Memory Sequence', icon: '🧠' },
+  { key: 'reaction_time',   name: 'Reaction Test',   icon: '⚡' },
+  { key: 'quiz_marathon',   name: 'Quiz Marathon',   icon: '❓' },
+  { key: 'pattern_match',   name: 'Pattern Match',   icon: '🔷' },
+  { key: 'number_guess',    name: 'Number Guess',    icon: '🔢' },
+  { key: 'aim_tap',         name: 'Aim & Tap',       icon: '🎯' },
+];
+const TOURNAMENT_GAME_KEYS = TOURNAMENT_GAMES.map(g => g.key);
+const TOURNAMENT_MAX_PLAYERS = 20;
+const TOURNAMENT_DURATION_SECONDS = 240; // 4 minutes
+const TOURNAMENT_PRIZE_COINS = 300;
+
+async function initTournamentTables() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tournaments (
+      id SERIAL PRIMARY KEY,
+      game_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'waiting',
+      max_players INTEGER NOT NULL DEFAULT ${TOURNAMENT_MAX_PLAYERS},
+      prize_coins INTEGER NOT NULL DEFAULT ${TOURNAMENT_PRIZE_COINS},
+      duration_seconds INTEGER NOT NULL DEFAULT ${TOURNAMENT_DURATION_SECONDS},
+      started_at TIMESTAMPTZ,
+      ends_at TIMESTAMPTZ,
+      winner_user_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS tournament_players (
+      id SERIAL PRIMARY KEY,
+      tournament_id INTEGER NOT NULL REFERENCES tournaments(id),
+      user_id INTEGER NOT NULL,
+      score INTEGER NOT NULL DEFAULT 0,
+      submitted BOOLEAN NOT NULL DEFAULT FALSE,
+      joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      submitted_at TIMESTAMPTZ,
+      UNIQUE(tournament_id, user_id)
+    );
+  `);
+}
+
+// Closes out a tournament: picks the highest score as winner, pays the prize, marks it finished.
+// Safe to call more than once — only acts on rooms that are still 'active'.
+async function finalizeTournamentIfDue(tournament) {
+  if (tournament.status !== 'active') return tournament;
+  const isTimeUp = tournament.ends_at && new Date(tournament.ends_at) <= new Date();
+  const allSubmittedRes = await pool.query(
+    'SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE submitted) AS done FROM tournament_players WHERE tournament_id = $1',
+    [tournament.id]
+  );
+  const { total, done } = allSubmittedRes.rows[0];
+  const allSubmitted = parseInt(total, 10) > 0 && parseInt(total, 10) === parseInt(done, 10);
+  if (!isTimeUp && !allSubmitted) return tournament;
+
+  const winnerRes = await pool.query(
+    'SELECT user_id, score FROM tournament_players WHERE tournament_id = $1 ORDER BY score DESC, submitted_at ASC LIMIT 1',
+    [tournament.id]
+  );
+  const winner = winnerRes.rows[0];
+  await pool.query(`UPDATE tournaments SET status = 'finished', winner_user_id = $1 WHERE id = $2`, [winner ? winner.user_id : null, tournament.id]);
+  if (winner) {
+    const finalCoins = await awardCoins(winner.user_id, tournament.prize_coins);
+    await logActivity(winner.user_id, '🏆', 'Tournament won!', `+${finalCoins} coins`);
+  }
+  const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [tournament.id]);
+  return rows[0];
+}
+
+// Finds an open ("waiting") room for a game with a free slot, or creates a fresh one.
+async function getOrCreateWaitingRoom(gameKey) {
+  const openRes = await pool.query(
+    `SELECT t.* FROM tournaments t
+     WHERE t.game_key = $1 AND t.status = 'waiting'
+       AND (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) < t.max_players
+     ORDER BY t.created_at ASC LIMIT 1`,
+    [gameKey]
+  );
+  if (openRes.rows[0]) return openRes.rows[0];
+  const insertRes = await pool.query(
+    `INSERT INTO tournaments (game_key, max_players, prize_coins, duration_seconds)
+     VALUES ($1, $2, $3, $4) RETURNING *`,
+    [gameKey, TOURNAMENT_MAX_PLAYERS, TOURNAMENT_PRIZE_COINS, TOURNAMENT_DURATION_SECONDS]
+  );
+  return insertRes.rows[0];
+}
+
+app.get('/api/tournament/games', optionalAuth, async (req, res) => {
+  try {
+    const summaries = [];
+    for (const g of TOURNAMENT_GAMES) {
+      const roomRes = await pool.query(
+        `SELECT t.id, t.status,
+           (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS player_count
+         FROM tournaments t
+         WHERE t.game_key = $1 AND t.status IN ('waiting','active')
+         ORDER BY t.created_at DESC LIMIT 1`,
+        [g.key]
+      );
+      const room = roomRes.rows[0];
+      summaries.push({
+        ...g,
+        roomId: room ? room.id : null,
+        status: room ? room.status : 'none',
+        playerCount: room ? parseInt(room.player_count, 10) : 0,
+        maxPlayers: TOURNAMENT_MAX_PLAYERS,
+      });
+    }
+    res.json({ games: summaries, prizeCoins: TOURNAMENT_PRIZE_COINS, durationSeconds: TOURNAMENT_DURATION_SECONDS });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load tournaments.' });
+  }
+});
+
+app.post('/api/tournament/join', requireAuth, async (req, res) => {
+  try {
+    const { gameKey } = req.body;
+    if (!TOURNAMENT_GAME_KEYS.includes(gameKey)) return res.status(400).json({ error: 'Unknown game.' });
+
+    // already in an open room for this game? just return it instead of double-joining
+    const existingRes = await pool.query(
+      `SELECT t.* FROM tournaments t
+       JOIN tournament_players p ON p.tournament_id = t.id
+       WHERE p.user_id = $1 AND t.game_key = $2 AND t.status IN ('waiting','active')
+       ORDER BY t.created_at DESC LIMIT 1`,
+      [req.userId, gameKey]
+    );
+    let tournament = existingRes.rows[0];
+
+    if (!tournament) {
+      tournament = await getOrCreateWaitingRoom(gameKey);
+      await pool.query('INSERT INTO tournament_players (tournament_id, user_id) VALUES ($1, $2)', [tournament.id, req.userId]);
+    }
+
+    const countRes = await pool.query('SELECT COUNT(*) AS c FROM tournament_players WHERE tournament_id = $1', [tournament.id]);
+    const playerCount = parseInt(countRes.rows[0].c, 10);
+
+    // room just filled up — start the match for everyone in it
+    if (tournament.status === 'waiting' && playerCount >= tournament.max_players) {
+      const endsAt = new Date(Date.now() + tournament.duration_seconds * 1000).toISOString();
+      await pool.query(`UPDATE tournaments SET status = 'active', started_at = NOW(), ends_at = $1 WHERE id = $2`, [endsAt, tournament.id]);
+      const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [tournament.id]);
+      tournament = rows[0];
+    }
+
+    res.json({ tournament, playerCount });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not join tournament.' });
+  }
+});
+
+app.get('/api/tournament/:id/status', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
+    let tournament = rows[0];
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+    tournament = await finalizeTournamentIfDue(tournament);
+
+    const countRes = await pool.query('SELECT COUNT(*) AS c FROM tournament_players WHERE tournament_id = $1', [tournament.id]);
+    const mineRes = await pool.query('SELECT * FROM tournament_players WHERE tournament_id = $1 AND user_id = $2', [tournament.id, req.userId]);
+    res.json({
+      tournament,
+      playerCount: parseInt(countRes.rows[0].c, 10),
+      secondsLeft: tournament.ends_at ? Math.max(0, Math.round((new Date(tournament.ends_at) - Date.now()) / 1000)) : null,
+      me: mineRes.rows[0] || null,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load tournament status.' });
+  }
+});
+
+app.post('/api/tournament/:id/submit-score', requireAuth, async (req, res) => {
+  try {
+    const { score } = req.body;
+    if (typeof score !== 'number' || score < 0) return res.status(400).json({ error: 'Invalid score.' });
+
+    const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
+    let tournament = rows[0];
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+    if (tournament.status !== 'active') return res.status(400).json({ error: 'Tournament is not active.' });
+
+    const updateRes = await pool.query(
+      `UPDATE tournament_players SET score = $1, submitted = TRUE, submitted_at = NOW()
+       WHERE tournament_id = $2 AND user_id = $3 AND submitted = FALSE RETURNING *`,
+      [Math.round(score), tournament.id, req.userId]
+    );
+    if (updateRes.rowCount === 0) return res.status(400).json({ error: 'Score already submitted or you are not in this tournament.' });
+
+    tournament = await finalizeTournamentIfDue(tournament);
+    res.json({ success: true, tournament });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not submit score.' });
+  }
+});
+
+app.get('/api/tournament/:id/leaderboard', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
+    let tournament = rows[0];
+    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
+    tournament = await finalizeTournamentIfDue(tournament);
+
+    const boardRes = await pool.query(
+      `SELECT p.user_id, u.name, p.score, p.submitted
+       FROM tournament_players p JOIN users u ON u.id = p.user_id
+       WHERE p.tournament_id = $1 ORDER BY p.score DESC, p.submitted_at ASC`,
+      [tournament.id]
+    );
+    res.json({ tournament, board: boardRes.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Could not load leaderboard.' });
   }
 });
 

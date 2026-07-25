@@ -1,1123 +1,1775 @@
-/ ============================================================
-// EARNY DAY — combined single-file backend (Postgres / Supabase version)
-// Everything (database, auth, ads, wallet, leaderboard, withdraw,
-// payment, admin) lives in this one file so it's easy to copy-paste.
-// ============================================================
-
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
-const crypto = require('crypto');
-const { Pool } = require('pg');
-const Razorpay = require('razorpay');
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-app.use(express.static('public'));
-app.get('/', (req, res) => res.sendFile('earny-day.html', { root: 'public' }));
-
-// ---------- DATABASE (Supabase Postgres) ----------
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: { rejectUnauthorized: false },
-});
-
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
-      is_verified BOOLEAN NOT NULL DEFAULT FALSE,
-      otp_hash TEXT,
-      otp_expires_at TIMESTAMPTZ,
-      is_premium BOOLEAN NOT NULL DEFAULT FALSE,
-      wallet_coins INTEGER NOT NULL DEFAULT 0,
-      total_earned INTEGER NOT NULL DEFAULT 0,
-      ads_watched_today INTEGER NOT NULL DEFAULT 0,
-      last_active_date DATE NOT NULL DEFAULT CURRENT_DATE,
-      referral_code TEXT UNIQUE,
-      referred_by INTEGER,
-      referral_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS ad_claims (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      ad_name TEXT NOT NULL,
-      coins INTEGER NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS withdrawals (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      amount_inr NUMERIC NOT NULL,
-      coins_deducted INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'pending',
-      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      paid_at TIMESTAMPTZ
-    );
-    CREATE TABLE IF NOT EXISTS config (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      coin_per_ad INTEGER NOT NULL DEFAULT 12,
-      coin_to_inr NUMERIC NOT NULL DEFAULT 0.01,
-      min_withdraw_inr NUMERIC NOT NULL DEFAULT 50,
-      daily_free_limit INTEGER NOT NULL DEFAULT 150,
-      user_share_percent INTEGER NOT NULL DEFAULT 80
-    );
-    CREATE TABLE IF NOT EXISTS offer_completions (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      network_trans_id TEXT UNIQUE NOT NULL,
-      offer_id TEXT,
-      payout_usd NUMERIC NOT NULL,
-      coins_awarded INTEGER NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS activity_log (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER NOT NULL,
-      icon TEXT NOT NULL,
-      title TEXT NOT NULL,
-      subtitle TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-  `);
-  // Migration-safe: add new config columns if this table already existed before these were introduced
-  await pool.query(`
-    ALTER TABLE config ADD COLUMN IF NOT EXISTS cpa_user_share_percent INTEGER NOT NULL DEFAULT 75;
-    ALTER TABLE config ADD COLUMN IF NOT EXISTS usd_to_inr_rate NUMERIC NOT NULL DEFAULT 85;
-    ALTER TABLE config ADD COLUMN IF NOT EXISTS referral_bonus_coins INTEGER NOT NULL DEFAULT 50;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_code TEXT UNIQUE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by INTEGER;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS checkin_streak INTEGER NOT NULL DEFAULT 0;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_checkin_date DATE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_spin_date DATE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS last_scratch_date DATE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_bonus_paid BOOLEAN NOT NULL DEFAULT FALSE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS dob DATE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS gender TEXT;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_bronze_paid BOOLEAN NOT NULL DEFAULT FALSE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_silver_paid BOOLEAN NOT NULL DEFAULT FALSE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_gold_paid BOOLEAN NOT NULL DEFAULT FALSE;
-    ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_platinum_paid BOOLEAN NOT NULL DEFAULT FALSE;
-  `);
-  const { rows } = await pool.query('SELECT * FROM config WHERE id = 1');
-  if (rows.length === 0) {
-    await pool.query('INSERT INTO config (id) VALUES (1)');
-  }
-  await initTournamentTables();
-}
-
-async function getConfig() {
-  const { rows } = await pool.query('SELECT * FROM config WHERE id = 1');
-  return rows[0];
-}
-
-// ---------- MAILER (uses Brevo's HTTP API over port 443) ----------
-async function sendOtpEmail(toEmail, otp) {
-  if (!process.env.BREVO_API_KEY || !process.env.SMTP_FROM) {
-    console.log(`[DEV — no Brevo API key configured] OTP for ${toEmail}: ${otp}`);
-    return;
-  }
-  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'api-key': process.env.BREVO_API_KEY,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({
-      sender: { name: 'Earny Day', email: process.env.SMTP_FROM },
-      to: [{ email: toEmail }],
-      subject: 'Your Earny Day verification code',
-      htmlContent: `
 <!DOCTYPE html>
-<html>
-<body style="margin:0; padding:0; background-color:#f1f3f6;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f3f6; padding:32px 16px;">
-    <tr>
-      <td align="center">
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:420px; background-color:#ffffff; border-radius:16px; overflow:hidden; border:1px solid #e3e6ec;">
-
-          <tr>
-            <td style="background-color:#0f6b5c; padding:28px 32px;">
-              <table role="presentation" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td style="width:32px; height:32px; background-color:#ffffff; border-radius:9px; text-align:center; font-size:18px; line-height:32px;">💰</td>
-                  <td style="padding-left:12px; color:#ffffff; font-size:20px; font-weight:700; font-family:Arial,sans-serif;">Earny Day</td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <tr>
-            <td style="padding:36px 32px 8px;">
-              <p style="margin:0 0 6px; font-family:Arial,sans-serif; font-size:22px; font-weight:700; color:#101828;">Verify your email</p>
-              <p style="margin:0; font-family:Arial,sans-serif; font-size:14px; color:#667085; line-height:1.6;">
-                Enter this code in the app to activate your account. It expires in <b>10 minutes</b>.
-              </p>
-            </td>
-          </tr>
-
-          <tr>
-            <td style="padding:24px 32px;">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f1f3f6; border-radius:12px;">
-                <tr>
-                  <td align="center" style="padding:22px 16px;">
-                    <span style="font-family:'Courier New',Courier,monospace; font-size:36px; font-weight:700; letter-spacing:10px; color:#0f6b5c;">${otp}</span>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-
-          <tr>
-            <td style="padding:0 32px 32px;">
-              <p style="margin:0; font-family:Arial,sans-serif; font-size:12px; color:#98a2b3; line-height:1.6;">
-                Didn't request this? You can safely ignore this email — your account is still secure.
-              </p>
-            </td>
-          </tr>
-
-          <tr>
-            <td style="background-color:#f7f8fa; padding:18px 32px; border-top:1px solid #e3e6ec;">
-              <p style="margin:0; font-family:Arial,sans-serif; font-size:12px; color:#98a2b3; text-align:center;">Earny Day — Watch. Earn. Daily.</p>
-            </td>
-          </tr>
-
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`,
-}),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`Brevo API error (${res.status}): ${body}`);
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Earny Day — Watch. Earn. Daily.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+<style>
+  :root{
+    --bg:#0e0d1a; --surface:#171529; --surface-alt:#1f1c35; --line:#2c2848;
+    --primary:#f5a623; --primary-soft:rgba(245,166,35,0.14);
+    --accent:#f5a623; --accent-soft:rgba(245,166,35,0.14);
+    --indigo:#8b5cf6; --indigo-soft:rgba(139,92,246,0.16);
+    --text:#f2f0fa; --text-dim:#9691b8; --radius:14px;
+    --shadow:0 4px 14px rgba(0,0,0,0.35);
   }
-}
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{ background:var(--bg); color:var(--text); font-family:'Inter',sans-serif; line-height:1.5; min-height:100vh; padding-bottom:78px; }
+  h1,h2,h3{ font-family:'Inter',sans-serif; font-weight:700; letter-spacing:-0.01em; }
+  .mono{ font-family:'JetBrains Mono',monospace; }
+  .wrap{ max-width:1080px; margin:0 auto; padding:0 24px; }
 
-// ---------- AUTH HELPERS ----------
-function signToken(userId) { return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn: '30d' }); }
-function generateOtp() { return String(Math.floor(100000 + Math.random() * 900000)); }
-
-function requireAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (!token) return res.status(401).json({ error: 'Missing token' });
-  try {
-    req.userId = jwt.verify(token, process.env.JWT_SECRET).userId;
-    next();
-  } catch (err) { return res.status(401).json({ error: 'Invalid or expired token' }); }
-}
-function optionalAuth(req, res, next) {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
-  if (token) { try { req.userId = jwt.verify(token, process.env.JWT_SECRET).userId; } catch (e) {} }
-  next();
-}
-function requireAdmin(req, res, next) {
-  if (req.headers['x-admin-key'] !== process.env.ADMIN_KEY) return res.status(403).json({ error: 'Invalid admin key' });
-  next();
-}
-
-async function issueAndSendOtp(user) {
-  const otp = generateOtp();
-  const otpHash = bcrypt.hashSync(otp, 8);
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-  await pool.query('UPDATE users SET otp_hash = $1, otp_expires_at = $2 WHERE id = $3', [otpHash, expiresAt, user.id]);
-  await sendOtpEmail(user.email, otp);
-}
-
-app.get('/api/health', (req, res) => res.json({ ok: true }));
-
-// ---------- AUTH ROUTES ----------
-app.post('/api/auth/signup', async (req, res) => {
-  try {
-    const { name, email, password, ref } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ error: 'name, email and password are required' });
-    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
-
-    const existingRes = await pool.query('SELECT id, is_verified FROM users WHERE email = $1', [email.toLowerCase()]);
-    const existing = existingRes.rows[0];
-    if (existing && existing.is_verified) return res.status(409).json({ error: 'Email already registered' });
-
-    // resolve referral code to a referrer's user id, if provided and valid
-    let referrerId = null;
-    if (ref) {
-      const refRes = await pool.query('SELECT id FROM users WHERE referral_code = $1', [ref.toUpperCase()]);
-      if (refRes.rows[0]) referrerId = refRes.rows[0].id;
-    }
-
-    const hash = bcrypt.hashSync(password, 10);
-    let userId;
-    if (existing) {
-      await pool.query('UPDATE users SET name = $1, password_hash = $2 WHERE id = $3', [name, hash, existing.id]);
-      userId = existing.id;
-    } else {
-      const insertRes = await pool.query(
-        'INSERT INTO users (name, email, password_hash, referred_by) VALUES ($1, $2, $3, $4) RETURNING id',
-        [name, email.toLowerCase(), hash, referrerId]
-      );
-      userId = insertRes.rows[0].id;
-      // referral_code is derived from the new user's own id — guaranteed unique, no collision handling needed
-      const code = 'EARN' + userId.toString(36).toUpperCase();
-      await pool.query('UPDATE users SET referral_code = $1 WHERE id = $2', [code, userId]);
-    }
-    const userRes = await pool.query('SELECT * FROM users WHERE id = $1', [userId]);
-    const user = userRes.rows[0];
-
-    try {
-      await issueAndSendOtp(user);
-    } catch (err) {
-      return res.status(500).json({ error: 'Could not send verification email. Try again shortly.' });
-    }
-    res.json({ message: 'Verification code sent to your email', email: user.email });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Signup failed. Please try again.' });
+  /* ---------- auth screen ---------- */
+  #authScreen{
+    min-height:100vh; display:flex; align-items:center; justify-content:center; padding:24px;
   }
-});
-
-app.post('/api/auth/verify-otp', async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-    if (!email || !otp) return res.status(400).json({ error: 'email and otp are required' });
-
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
-    const user = rows[0];
-    if (!user || !user.otp_hash) return res.status(400).json({ error: 'No pending verification for this email' });
-    if (new Date(user.otp_expires_at) < new Date()) return res.status(400).json({ error: 'Code expired — request a new one' });
-    if (!bcrypt.compareSync(otp, user.otp_hash)) return res.status(400).json({ error: 'Incorrect code' });
-
-    await pool.query('UPDATE users SET is_verified = TRUE, otp_hash = NULL, otp_expires_at = NULL WHERE id = $1', [user.id]);
-
-    // referral bonus — pays out once, only when the referred user successfully verifies
-    if (user.referred_by && !user.referral_bonus_paid) {
-      const cfg = await getConfig();
-      const bonus = cfg.referral_bonus_coins;
-      await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [bonus, user.referred_by]);
-      await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1, referral_bonus_paid = TRUE WHERE id = $2', [bonus, user.id]);
-      await logActivity(user.referred_by, '🎁', 'Referral bonus earned', `A friend joined using your code · +${bonus} coins`);
-      await logActivity(user.id, '🎁', 'Welcome bonus', `Referral signup bonus · +${bonus} coins`);
-    }
-
-    res.json({ token: signToken(user.id), user: { id: user.id, name: user.name, email: user.email } });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Verification failed. Please try again.' });
+  .auth-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); padding:32px; width:100%; max-width:380px; }
+  .auth-card h1{ font-size:1.4rem; margin-bottom:6px; }
+  .auth-card p.sub{ color:var(--text-dim); font-size:0.88rem; margin-bottom:22px; }
+  .field{ margin-bottom:14px; }
+  .field label{ display:block; font-size:0.82rem; font-weight:600; margin-bottom:6px; }
+  .field input{
+    width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px;
+    font-family:'Inter',sans-serif; font-size:0.92rem; background:var(--surface-alt); color:var(--text);
   }
-});
-
-app.post('/api/auth/resend-otp', async (req, res) => {
-  try {
-    const { email } = req.body;
-    if (!email) return res.status(400).json({ error: 'email is required' });
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
-    const user = rows[0];
-    if (!user) return res.status(404).json({ error: 'No account found for this email' });
-    if (user.is_verified) return res.status(400).json({ error: 'Account already verified — please log in' });
-    try {
-      await issueAndSendOtp(user);
-    } catch (err) {
-      return res.status(500).json({ error: 'Could not send verification email. Try again shortly.' });
-    }
-    res.json({ message: 'A new code has been sent' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not resend code. Please try again.' });
+  .field input:focus{ outline:2px solid var(--primary-soft); border-color:var(--primary); }
+  .field.pw-field{ position:relative; }
+  .field.pw-field input{ padding-right:44px; }
+  .pw-toggle{
+    position:absolute; right:6px; top:29px; background:none; border:none; cursor:pointer;
+    padding:6px 8px; font-size:0.78rem; font-weight:600; color:var(--text-dim); border-radius:6px;
   }
-});
+  .pw-toggle:hover{ color:var(--primary); }
+  .resend-row{ text-align:center; font-size:0.82rem; color:var(--text-dim); margin-top:4px; }
+  .resend-row a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
+  .resend-row.disabled a{ color:var(--text-dim); pointer-events:none; }
+  .auth-error{ color:#c4432f; font-size:0.82rem; margin-bottom:10px; min-height:1em; }
+  .auth-switch{ text-align:center; margin-top:16px; font-size:0.85rem; color:var(--text-dim); }
+  .auth-switch a{ color:var(--primary); font-weight:600; cursor:pointer; text-decoration:none; }
+  /* ---------- app shell (hidden until logged in) ---------- */
+  #app{ display:none; }
 
-app.post('/api/auth/login', async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'email and password are required' });
-    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase()]);
-    const user = rows[0];
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Invalid email or password' });
-    if (!user.is_verified) return res.status(403).json({ error: 'Please verify your email first', needsVerification: true });
-    res.json({ token: signToken(user.id), user: { id: user.id, name: user.name, email: user.email } });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Login failed. Please try again.' });
+  header.topbar{ position:sticky; top:0; z-index:20; background:var(--surface); border-bottom:1px solid var(--line); }
+  .topbar-inner{ display:flex; align-items:center; justify-content:space-between; padding:16px 24px; }
+  .logo{ display:flex; align-items:center; gap:10px; font-weight:700; font-size:1.15rem; }
+  .logo-mark{ width:28px; height:28px; border-radius:8px; background:var(--primary); position:relative; flex-shrink:0; }
+  .logo-mark::after{ content:""; position:absolute; width:10px; height:10px; top:9px; left:9px; background:var(--surface); border-radius:2px; }
+  .wallet-pill{ display:flex; align-items:center; gap:8px; background:var(--surface-alt); border:1px solid var(--line); padding:8px 16px; border-radius:999px; font-size:0.9rem; }
+  .wallet-pill .amt{ color:var(--accent); font-weight:700; }
+  .logout-btn{ background:none; border:none; color:var(--text-dim); font-size:0.78rem; cursor:pointer; padding:4px; }
+  .bell-btn{ background:none; border:none; font-size:1.1rem; cursor:pointer; position:relative; padding:4px; }
+  .bell-dot{ position:absolute; top:2px; right:2px; width:8px; height:8px; border-radius:50%; background:var(--accent); border:1.5px solid var(--surface); }
+  .notif-row{ display:flex; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .notif-row .ni{ font-size:1.3rem; }
+  .notif-row .nt{ font-weight:600; font-size:0.88rem; }
+  .notif-row .ns{ color:var(--text-dim); font-size:0.78rem; margin-top:2px; }
+  .notif-row .nd{ color:var(--text-dim); font-size:0.7rem; margin-top:4px; }
+
+  nav.tabbar{ position:fixed; bottom:0; left:0; right:0; z-index:30; background:var(--surface); border-top:1px solid var(--line); box-shadow:0 -2px 10px rgba(16,24,40,0.04); display:flex; justify-content:center; }
+  .tabbar-inner{ display:flex; width:100%; max-width:600px; }
+  .tab-btn{ flex:1; background:none; border:none; padding:12px 4px 10px; display:flex; flex-direction:column; align-items:center; gap:4px; color:var(--text-dim); font-size:0.68rem; font-weight:600; cursor:pointer; font-family:'Inter',sans-serif; }
+  .tab-btn .ic{ font-size:1.1rem; }
+  .tab-btn.active{ color:var(--primary); }
+
+  .page{ display:none; padding:32px 0 20px; animation:fadeIn .25s ease; }
+  .page.active{ display:block; }
+  @keyframes fadeIn{ from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:translateY(0);} }
+  .page-head{ margin-bottom:24px; }
+  .page-head h1{ font-size:1.6rem; }
+  .page-head p{ color:var(--text-dim); font-size:0.92rem; margin-top:6px; }
+  .eyebrow{ display:inline-flex; align-items:center; gap:8px; color:var(--primary); font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:14px; }
+  .eyebrow::before{ content:""; width:6px; height:6px; border-radius:50%; background:var(--primary); }
+
+  .status-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:22px 26px; margin-bottom:24px; box-shadow:var(--shadow); }
+  .status-top{ display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+  .plan-badge{ padding:5px 14px; border-radius:999px; font-size:0.75rem; font-weight:700; text-transform:uppercase; letter-spacing:0.04em; }
+  .plan-badge.free{ background:var(--surface-alt); color:var(--text-dim); border:1px solid var(--line); }
+  .plan-badge.premium{ background:var(--indigo-soft); color:var(--indigo); border:1px solid rgba(76,79,224,0.35); }
+  .usage-label{ display:flex; justify-content:space-between; font-size:0.85rem; color:var(--text-dim); margin-bottom:6px; }
+  .usage-bar{ height:10px; border-radius:999px; background:var(--surface-alt); overflow:hidden; }
+  .usage-fill{ height:100%; background:var(--primary); border-radius:999px; transition:width .4s ease; }
+  .usage-fill.unlimited{ background:linear-gradient(90deg, var(--primary), var(--indigo)); width:100% !important; }
+
+  .stat-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:14px; }
+  .stat{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+  .stat .num{ font-size:1.5rem; font-weight:700; }
+  .stat .lab{ color:var(--text-dim); font-size:0.8rem; margin-top:4px; }
+  .stat.you .num{ color:var(--accent); }
+
+  .queue{ display:flex; flex-direction:column; gap:14px; }
+  .ad-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px 20px; display:flex; align-items:center; gap:18px; box-shadow:var(--shadow); }
+  .ad-card.active{ border-color:var(--primary); box-shadow:0 0 0 1px var(--primary) inset; }
+  .ad-card.done{ opacity:0.45; }
+  .ad-thumb{ width:64px; height:44px; border-radius:8px; flex-shrink:0; background:var(--surface-alt); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-size:0.7rem; color:var(--text-dim); }
+  .ad-info{ flex:1; min-width:0; }
+  .ad-info .name{ font-weight:600; font-size:0.95rem; }
+  .ad-info .meta{ color:var(--text-dim); font-size:0.8rem; margin-top:2px; }
+  .ad-action{ flex-shrink:0; min-width:96px; text-align:right; }
+  .tcard{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:14px; display:flex; gap:12px; box-shadow:var(--shadow); }
+  .tcard .thumb{ width:60px; height:60px; border-radius:12px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:1.7rem; background:var(--surface-alt); }
+  .tcard .body{ flex:1; min-width:0; }
+  .tcard .title-row{ display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap; }
+  .tcard .title-row strong{ font-size:0.98rem; }
+  .tcard .badge{ font-size:0.62rem; font-weight:700; padding:2px 8px; border-radius:8px; letter-spacing:0.3px; }
+  .tcard .badge.live{ background:#8b5cf6; color:#fff; }
+  .tcard .badge.hot{ background:#ef4444; color:#fff; }
+  .tcard .players{ color:#a78bfa; font-size:0.78rem; margin-bottom:8px; }
+  .tcard .stats-row{ display:flex; gap:14px; font-size:0.68rem; color:var(--text-dim); margin-bottom:10px; }
+  .tcard .stats-row b{ color:var(--text); display:block; font-size:0.82rem; }
+  .tcard .play-btn{ background:linear-gradient(135deg,#8b5cf6,#6d28d9); color:#fff; border:none; border-radius:10px; padding:8px 18px; font-weight:700; font-size:0.8rem; float:right; }
+  .tcard .play-btn.hot{ background:linear-gradient(135deg,#ef4444,#b91c1c); }
+  .tcard .play-btn:disabled{ opacity:0.5; }
+
+  .ring{ width:44px; height:44px; border-radius:50%; background:conic-gradient(var(--primary) calc(var(--p,0) * 1%), var(--line) 0); display:flex; align-items:center; justify-content:center; font-size:0.72rem; font-weight:700; margin-left:auto; }
+  .ring::after{ content:attr(data-t); width:34px; height:34px; border-radius:50%; background:var(--surface); display:flex; align-items:center; justify-content:center; }
+
+  button{ font-family:'Inter',sans-serif; font-weight:600; cursor:pointer; border:none; border-radius:999px; padding:10px 20px; font-size:0.85rem; transition:transform .15s ease, opacity .15s ease; }
+  button:active{ transform:scale(0.96); }
+  button:disabled{ opacity:0.45; cursor:not-allowed; }
+  .btn-claim{ background:var(--primary); color:#1a1206; font-weight:700; }
+  .btn-full.loading{ display:flex; align-items:center; justify-content:center; gap:10px; }
+  .spinner{
+    width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; flex-shrink:0;
+}
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .btn-claim:hover:not(:disabled){ opacity:0.9; }
+  .btn-premium{ background:var(--indigo); color:#ffffff; }
+  .btn-premium:hover{ opacity:0.9; }
+  .btn-ghost{ background:transparent; border:1px solid var(--line); color:var(--text); }
+  .btn-ghost:hover{ border-color:var(--primary); color:var(--primary); }
+  .btn-full{ width:100%; }
+  .spinner{
+    display:inline-block; width:16px; height:16px; border-radius:50%;
+    border:2px solid rgba(255,255,255,0.4); border-top-color:#ffffff;
+    animation:spin 0.7s linear infinite; vertical-align:middle; margin-right:8px;
   }
-});
+  .spinner.dark{ border-color:rgba(15,107,92,0.25); border-top-color:var(--primary); }
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .loading-block{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:48px 20px; color:var(--text-dim); font-size:0.9rem; }
+  .loading-block .spinner{ width:28px; height:28px; border-width:3px; margin-right:0; }
 
-// ---------- REFERRALS ----------
-app.get('/api/referral/me', requireAuth, async (req, res) => {
-  try {
-    const userRes = await pool.query('SELECT referral_code FROM users WHERE id = $1', [req.userId]);
-    const referralCode = userRes.rows[0].referral_code;
-    const countRes = await pool.query('SELECT COUNT(*) AS c FROM users WHERE referred_by = $1 AND is_verified = TRUE', [req.userId]);
-    const cfg = await getConfig();
-    res.json({
-      referralCode,
-      referredCount: parseInt(countRes.rows[0].c, 10),
-      bonusPerReferral: cfg.referral_bonus_coins,
+  .lock-card{ background:var(--surface); border:1px dashed var(--line); border-radius:var(--radius); padding:28px; text-align:center; }
+  .lock-card .icon{ font-size:2rem; margin-bottom:10px; }
+  .lock-card h3{ font-size:1.1rem; margin-bottom:6px; }
+  .lock-card p{ color:var(--text-dim); font-size:0.88rem; margin-bottom:18px; max-width:340px; margin-left:auto; margin-right:auto; }
+
+  .withdraw-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-bottom:24px; box-shadow:var(--shadow); }
+  .rate{ color:var(--text-dim); font-size:0.82rem; margin-top:6px; }
+
+  table{ width:100%; border-collapse:collapse; font-size:0.88rem; }
+  th{ text-align:left; color:var(--text-dim); font-weight:600; font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; padding:8px 10px; border-bottom:1px solid var(--line); }
+  td{ padding:10px 10px; border-bottom:1px solid var(--line); }
+  tr:last-child td{ border-bottom:none; }
+  .pos{ color:var(--primary); }
+
+  .lb-row{ display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; box-shadow:var(--shadow); }
+  .lb-row.you-row{ border-color:var(--primary); box-shadow:0 0 0 1px var(--primary) inset; }
+  .lb-rank{ width:28px; text-align:center; font-weight:700; font-family:'JetBrains Mono',monospace; color:var(--text-dim); }
+  .lb-row.top1 .lb-rank{ color:var(--accent); }
+  .lb-row.top2 .lb-rank{ color:#8a93a6; }
+  .lb-row.top3 .lb-rank{ color:#b07a3a; }
+  .lb-avatar{ width:36px; height:36px; border-radius:50%; background:var(--surface-alt); border:1px solid var(--line); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.85rem; flex-shrink:0; }
+  .lb-name{ flex:1; font-weight:600; font-size:0.92rem; }
+  .lb-name .you-tag{ color:var(--primary); font-size:0.72rem; font-weight:700; margin-left:6px; }
+  .lb-coins{ font-family:'JetBrains Mono',monospace; color:var(--accent); font-weight:700; font-size:0.9rem; }
+  .lb-footnote{ color:var(--text-dim); font-size:0.85rem; text-align:center; margin-top:14px; padding:14px; border:1px dashed var(--line); border-radius:12px; }
+
+  .plan-compare{ display:grid; grid-template-columns:repeat(auto-fit, minmax(220px,1fr)); gap:16px; margin-bottom:20px; }
+  .earn-grid{ display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; }
+  .wallet-hero{
+    background:linear-gradient(135deg, #241f42, #1a1730);
+    border:1px solid var(--line); border-radius:20px; padding:24px; margin-bottom:16px;
+    position:relative; overflow:hidden;
+  }
+  .wallet-hero::after{ content:"💰"; position:absolute; right:-10px; top:-10px; font-size:5rem; opacity:0.08; }
+  .wallet-hero .wh-label{ color:var(--text-dim); font-size:0.82rem; }
+  .wallet-hero .wh-amt{ font-size:2.1rem; font-weight:800; color:var(--primary); margin:4px 0 14px; }
+  .wallet-hero .wh-row{ display:flex; gap:24px; }
+  .wallet-hero .wh-item .l{ color:var(--text-dim); font-size:0.72rem; }
+  .wallet-hero .wh-item .v{ font-weight:700; font-size:0.95rem; }
+  .premium-banner{
+    background:linear-gradient(135deg, var(--indigo), #6d28d9);
+    border-radius:16px; padding:18px 20px; margin-bottom:20px; display:flex; align-items:center; gap:14px;
+    cursor:pointer;
+  }
+  .premium-banner .pb-ic{ font-size:1.8rem; }
+  .premium-banner .pb-title{ font-weight:700; color:#fff; font-size:0.95rem; }
+  .premium-banner .pb-sub{ color:rgba(255,255,255,0.75); font-size:0.78rem; }
+  .qa-grid{ display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-bottom:24px; }
+  .qa-item{
+    background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:16px 8px;
+    text-align:center; cursor:pointer; transition:transform .1s ease;
+  }
+  .qa-item:active{ transform:scale(0.95); }
+  .qa-item .qa-ic{ font-size:1.5rem; margin-bottom:6px; }
+  .qa-item .qa-label{ font-size:0.74rem; font-weight:600; color:var(--text); }
+  .earn-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; text-align:center; box-shadow:var(--shadow); }
+  .earn-ic{ font-size:1.6rem; margin-bottom:6px; }
+  .earn-title{ font-weight:600; font-size:0.9rem; margin-bottom:2px; }
+  .earn-sub{ color:var(--text-dim); font-size:0.76rem; margin-bottom:12px; min-height:2.2em; }
+  .badge-row{ display:flex; align-items:center; gap:14px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 18px; margin-bottom:10px; box-shadow:var(--shadow); }
+  .badge-row.locked{ opacity:0.55; }
+  .badge-ic{ font-size:1.5rem; }
+  .badge-info{ flex:1; }
+  .badge-info .bt{ font-weight:600; font-size:0.9rem; text-transform:capitalize; }
+  .badge-info .bs{ color:var(--text-dim); font-size:0.78rem; }
+  .checkin-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:18px; box-shadow:var(--shadow); }
+  .checkin-row{ display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; }
+  .checkin-day{ background:var(--surface-alt); border:1px solid var(--line); border-radius:10px; padding:10px 4px; text-align:center; }
+  .checkin-day .cd-label{ font-size:0.7rem; color:var(--text-dim); margin-bottom:4px; }
+  .checkin-day .cd-ic{ font-size:1.1rem; }
+  .checkin-day .cd-coin{ font-size:0.72rem; font-weight:600; margin-top:2px; }
+  .checkin-day.done{ border-color:var(--primary); background:var(--primary-soft); }
+  .checkin-day.today{ border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .checkin-day.locked{ opacity:0.5; }
+  .plan-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:24px; box-shadow:var(--shadow); }
+  .plan-card.highlight{ border-color:var(--indigo); box-shadow:0 0 0 1px var(--indigo) inset; }
+  .plan-card .ptitle{ font-size:1.1rem; font-weight:700; margin-bottom:4px; }
+  .plan-card .pprice{ color:var(--text-dim); font-size:0.85rem; margin-bottom:16px; }
+  .plan-card ul{ list-style:none; display:flex; flex-direction:column; gap:10px; margin-bottom:20px; }
+  .plan-card li{ font-size:0.88rem; color:var(--text); display:flex; gap:8px; }
+  .plan-card li::before{ content:"✓"; color:var(--primary); font-weight:700; }
+
+  #toast{ position:fixed; bottom:76px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--text); color:var(--surface); border:1px solid var(--text); padding:14px 22px; border-radius:12px; font-size:0.9rem; opacity:0; pointer-events:none; transition:all .3s ease; z-index:50; text-align:center; max-width:90%; }
+  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
+  .note{ background:var(--surface-alt); border:1px solid var(--line); border-left:3px solid var(--indigo); padding:14px 18px; border-radius:8px; color:var(--text-dim); font-size:0.85rem; margin-top:18px; }
+</style></head>
+<body>
+
+<!-- ============ AUTH SCREEN (login/signup) ============ -->
+<div id="authScreen">
+  <div class="auth-card">
+    <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1 id="authTitle">Log in</h1>
+    <p class="sub" id="authSub">Welcome back — watch ads, earn coins.</p>
+
+    <div class="auth-error" id="authError"></div>
+
+    <div class="field" id="nameField" style="display:none;">
+      <label>Name</label>
+      <input type="text" id="nameInput" placeholder="Your name">
+    </div>
+    <div class="field">
+      <label>Email</label>
+      <input type="email" id="emailInput" placeholder="you@example.com">
+    </div>
+    <div class="field pw-field">
+      <label>Password</label>
+      <input type="password" id="passwordInput" placeholder="••••••••">
+      <button type="button" class="pw-toggle" id="pwToggleBtn">Show</button>
+    </div>
+
+    <button class="btn-claim btn-full" id="authSubmitBtn">Log in</button>
+
+    <div class="auth-switch">
+      <span id="authSwitchText">Don't have an account?</span>
+      <a id="authSwitchLink">Sign up</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ OTP VERIFICATION SCREEN ============ -->
+<div id="otpScreen" style="display:none;">
+  <div class="auth-card">
+    <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
+    <h1>Verify your email</h1>
+    <p class="sub">We sent a 6-digit code to <strong id="otpEmailDisplay"></strong>. Enter it below to activate your account.</p>
+
+    <div class="auth-error" id="otpError"></div>
+
+    <div class="field">
+      <label>Verification code</label>
+      <input type="text" id="otpInput" inputmode="numeric" maxlength="6" placeholder="123456" style="letter-spacing:0.3em; font-family:'JetBrains Mono',monospace; text-align:center; font-size:1.1rem;">
+    </div>
+
+    <button class="btn-claim btn-full" id="otpSubmitBtn">Verify & Continue</button>
+
+    <div class="resend-row" id="resendRow">
+      Didn't get a code? <a id="resendOtpLink">Resend code</a>
+    </div>
+  </div>
+</div>
+
+<!-- ============ MAIN APP ============ -->
+<div id="app">
+
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo"><span class="logo-mark"></span> Earny Day</div>
+      <div style="display:flex; align-items:center; gap:14px;">
+        <div class="wallet-pill">💰 <span class="amt mono" id="walletBalance">0</span> coins</div>
+        <button class="bell-btn" id="notifBtn">🔔<span class="bell-dot" id="notifDot" style="display:none;"></span></button>
+        <button class="logout-btn" id="logoutBtn">Log out</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- notifications panel -->
+  
+<div id="notifPanelBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:70; justify-content:flex-end;" onclick="if(event.target===this) this.style.display='none';">
+    <div style="background:var(--surface); width:100%; max-width:380px; height:100%; padding:20px; overflow-y:auto;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <h3>Notifications</h3>
+        <button class="btn-ghost" onclick="document.getElementById('notifPanelBg').style.display='none'" style="padding:6px 14px;">Close</button>
+      </div>
+      <div id="notifList"></div>
+    </div>
+  </div>
+
+  <main class="wrap">
+
+    <section id="page-dashboard" class="page active">
+      <div class="eyebrow">Your Account</div>
+      <div class="page-head">
+        <h1 id="welcomeName">Welcome back</h1>
+        <p>Here's your activity for today.</p>
+      </div>
+
+      <div class="wallet-hero">
+        <div class="wh-label">Total Balance</div>
+        <div class="wh-amt mono" id="heroWalletInr">₹0.00</div>
+        <div class="wh-row">
+          <div class="wh-item"><div class="l">Coins</div><div class="v mono" id="heroCoins">0</div></div>
+          <div class="wh-item"><div class="l">Total Earned</div><div class="v mono" id="heroAdsWatched">0</div></div>
+          <div class="wh-item"><div class="l">Rank</div><div class="v mono" id="heroRank">—</div></div>
+        </div>
+      </div>
+
+      <div class="qa-grid">
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=tasks]').click()">
+          <div class="qa-ic">🎯</div><div class="qa-label">Surveys</div>
+        </div>
+        <div class="qa-item" onclick="document.getElementById('checkinBtn').scrollIntoView({behavior:'smooth', block:'center'})">
+          <div class="qa-ic">📅</div><div class="qa-label">Daily Check-in</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=tasks]').click()">
+          <div class="qa-ic">📋</div><div class="qa-label">Tasks</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=refer]').click()">
+          <div class="qa-ic">🎁</div><div class="qa-label">Refer & Earn</div>
+        </div>
+        <div class="qa-item" onclick="document.getElementById('spinCanvas') ? document.getElementById('spinCanvas').scrollIntoView({behavior:'smooth', block:'center'}) : null">
+          <div class="qa-ic">🎡</div><div class="qa-label">Spin & Win</div>
+        </div>
+        <div class="qa-item" onclick="document.querySelector('.tab-btn[data-page=more]').click()">
+          <div class="qa-ic">🏆</div><div class="qa-label">Leaderboard</div>
+        </div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat you"><div class="num mono" id="statEarned">0</div><div class="lab">Coins earned (all time)</div></div>
+        <div class="stat"><div class="num mono" id="statINR">₹0.00</div><div class="lab">Wallet value</div></div>
+        <div class="stat"><div class="num mono" id="statRank">Not ranked</div><div class="lab">Today's leaderboard</div></div>
+      </div>
+
+      <div class="page-head" style="margin-top:28px;">
+        <h1 style="font-size:1.2rem;">More ways to earn</h1>
+      </div>
+
+      <div class="checkin-card">
+        <div class="earn-title" style="margin-bottom:10px;">📅 Daily Check-in</div>
+        <div class="checkin-row" id="checkinRow"></div>
+        <button class="btn-claim btn-full" id="checkinBtn" style="margin-top:14px;">Check In</button>
+      </div>
+
+      <div class="earn-grid" style="margin-top:14px;">
+        <div class="earn-card">
+          <div class="earn-title" style="margin-bottom:8px;">🎡 Spin & Win</div>
+          <canvas id="spinCanvas" width="220" height="220" style="max-width:100%; margin:0 auto; display:block;"></canvas>
+          <button class="btn-claim btn-full" id="spinBtn" style="margin-top:12px;">Spin</button>
+        </div>
+        <div class="earn-card">
+          <div class="earn-title" style="margin-bottom:8px;">🎫 Scratch Card</div>
+          <div style="position:relative; width:100%; max-width:220px; height:120px; margin:0 auto;">
+            <div id="scratchPrize" style="position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.3rem; color:var(--accent); background:var(--surface-alt); border-radius:10px;">Tap Scratch</div>
+            <canvas id="scratchCanvas" width="220" height="120" style="position:absolute; inset:0; border-radius:10px; touch-action:none;"></canvas>
+          </div>
+          <button class="btn-claim btn-full" id="scratchBtn" style="margin-top:12px;">New Scratch Card</button>
+        </div>
+        <div class="earn-card" id="profileCard">
+          <div class="earn-ic">📝</div>
+          <div class="earn-title">Complete Profile</div>
+          <div class="earn-sub">One-time +30 coins</div>
+          <button class="btn-claim btn-full" id="profileBtn">Complete</button>
+        </div>
+      </div>
+<div class="page-head" style="margin-top:24px;">
+        <h1 style="font-size:1.2rem;">Achievement Badges</h1>
+        <p>One-time bonuses as your total earnings grow.</p>
+      </div>
+      <div id="badgesList" class="queue"></div>
+    </section>
+
+    <!-- profile completion modal -->
+    <div id="profileModalBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:60; align-items:center; justify-content:center; padding:20px;">
+      <div style="background:var(--surface); border-radius:16px; padding:26px; max-width:360px; width:100%;">
+        <h3 style="margin-bottom:4px;">Complete your profile</h3>
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:18px;">Earn +30 coins, one-time.</p>
+        <div class="field"><label>Date of birth</label><input type="date" id="dobInput"></div>
+        <div class="field">
+          <label>Gender</label>
+          <select id="genderInput" style="width:100%; padding:10px 12px; border:1px solid var(--line); border-radius:8px; background:var(--surface-alt); font-size:0.92rem;">
+            <option value="">Select…</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="auth-error" id="profileError"></div>
+        <button class="btn-claim btn-full" id="profileSubmitBtn">Save & Claim</button>
+        <button class="btn-ghost btn-full" id="profileCancelBtn" style="margin-top:8px;">Cancel</button>
+      </div>
+    </div>
+
+    <section id="page-wallet" class="page">
+      <div class="page-head"><h1>Wallet</h1><p>Your balance, conversion rate, and withdrawal.</p></div>
+      <div class="withdraw-card">
+        <div>
+          <div style="font-size:1.3rem; font-weight:700;" class="mono"><span id="withdrawAvailable">₹0.00</span> available</div>
+          <div class="rate" id="withdrawRateText">100 coins = ₹1.00 · Minimum withdrawal ₹50.00</div>
+        </div>
+        <button class="btn-claim" id="withdrawBtn" disabled>Request Withdrawal</button>
+      </div>
+      <h2 style="font-size:1.1rem; margin-bottom:14px;">History</h2>
+      <table>
+        <thead><tr><th>Ad</th><th>Time</th><th>Coins</th></tr></thead>
+        <tbody id="historyBody"><tr><td colspan="3" style="color:var(--text-dim);">Loading…</td></tr></tbody>
+      </table>
+      <div class="note">Withdrawals are approved manually by the admin until an automated payout API (RazorpayX, business KYC required) is connected.</div>
+    </section>
+
+    <section id="page-tasks" class="page">
+      <div class="page-head">
+        <h1>Tasks</h1>
+        <p>Higher-paying tasks — sign up for an app, try a service, complete a survey. Pays much more than watching an ad.</p>
+      </div>
+      <div id="tasksWallWrap">
+        <div class="loading-block">
+          <span class="spinner dark"></span>
+          <span>Loading tasks…</span>
+        </div>
+      </div>
+    </section>
+
+    <section id="page-refer" class="page">
+      <div class="page-head"><h1>Refer & Earn</h1><p>Invite friends and earn bonus coins together.</p></div>
+      <div class="status-card">
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-bottom:12px;">
+          Share your code — when a friend signs up and verifies their email, you both get <span id="referralBonusText">50</span> bonus coins.
+        </p>
+        <div style="display:flex; gap:10px; align-items:center;">
+          <div class="mono" id="referralCodeText" style="flex:1; background:var(--surface-alt); border:1px solid var(--line); border-radius:8px; padding:12px 14px; font-weight:700; font-size:1.15rem; letter-spacing:0.05em; text-align:center;">—</div>
+          <button class="btn-claim" id="copyReferralBtn" style="flex-shrink:0;">Copy Link</button>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:14px;">Friends referred so far: <b id="referralCountText" style="color:var(--text);">0</b></p>
+      </div>
+      <div class="note">Share your code on WhatsApp, Telegram, or anywhere — anyone who signs up with it counts toward your referral bonus.</div>
+    </section>
+
+    <section id="page-tournament" class="page">
+      <div class="page-head"><h1>🏆 Tournaments</h1><p id="tourneyPrizeNote">Compete live · winner takes the coins.</p></div>
+
+      <div id="tourney-list">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0; font-size:1.05rem;">Live Tournaments</h3>
+        </div>
+        <div id="tourneyGamesGrid" style="display:flex; flex-direction:column; gap:12px;"></div>
+      </div>
+
+      <div id="tourney-wait" style="display:none; text-align:center; padding:48px 20px;">
+        <div class="spinner dark" style="width:32px;height:32px;border-width:3px;margin:0 auto 16px;"></div>
+        <h3 id="tourneyWaitCount">Waiting for players…</h3>
+        <p style="color:var(--text-dim); font-size:0.85rem; margin-top:8px;">Match starts automatically once the room fills up.</p>
+        <button class="btn-ghost" style="margin-top:20px;" id="tourneyCancelBtn">Cancel</button>
+      </div>
+
+      <div id="tourney-play" style="display:none;">
+        <div class="status-card" style="display:flex; justify-content:space-between; align-items:center;">
+          <div>Score: <span id="tourneyScore" class="mono" style="font-weight:700;">0</span></div>
+          <div id="tourneyTimerWrap">⏱ <span id="tourneyTimer" class="mono" style="font-weight:700;">0</span>s</div>
+        </div>
+        <div id="tourneyGameArea"></div>
+      </div>
+
+      <!-- quick 3-5s post-game screen: your score + your live rank -->
+      <div id="tourney-quick" style="display:none; text-align:center; padding:50px 20px;">
+        <div style="font-size:2.2rem; margin-bottom:6px;">🏁</div>
+        <h2 style="margin:0 0 6px;">Nice run!</h2>
+        <p style="color:var(--text-dim); margin:0 0 20px;">Here's how you did</p>
+        <div class="status-card" style="display:flex; justify-content:space-around; text-align:center;">
+          <div><div style="color:var(--text-dim); font-size:0.75rem;">SCORE</div><div id="quickScore" class="mono" style="font-size:1.4rem; font-weight:800;">0</div></div>
+          <div><div style="color:var(--text-dim); font-size:0.75rem;">YOUR RANK</div><div id="quickRank" class="mono" style="font-size:1.4rem; font-weight:800;">—</div></div>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:16px;">Waiting for the full result…</p>
+      </div>
+
+      <div id="tourney-result" style="display:none;">
+        <div class="status-card" style="text-align:center;">
+          <h3 id="tourneyResultHead">Calculating result…</h3>
+        </div>
+        <div id="tourneyResultBoard" style="display:flex; flex-direction:column; gap:8px; margin-top:14px;"></div>
+        <button class="btn-claim btn-full" style="margin-top:16px;" id="tourneyPlayAgainBtn">Back to games</button>
+      </div>
+    </section>
+
+    <section id="page-more" class="page">
+      <div class="page-head"><h1>More</h1></div>
+
+      <div class="premium-banner" onclick="document.getElementById('premiumSection').scrollIntoView({behavior:'smooth'})">
+        <div class="pb-ic">👑</div>
+        <div style="flex:1;">
+          <div class="pb-title">Go Premium</div>
+          <div class="pb-sub">2x rewards · Priority payouts</div>
+        </div>
+        <div style="color:#fff; font-size:1.2rem;">›</div>
+      </div>
+
+      <div class="page-head" style="margin-top:20px;"><h1 style="font-size:1.1rem;">Leaderboard</h1><p>Today's top 10 earners.</p></div>
+      <div id="leaderboardList"></div>
+      <div id="leaderboardFootnote" class="lb-footnote" style="display:none;"></div>
+
+      <div class="page-head" style="margin-top:28px;" id="premiumSection"><h1 style="font-size:1.1rem;">Premium</h1></div>
+      <div class="plan-compare">
+        <div class="plan-card" id="freeCard">
+          <div class="ptitle">Free</div><div class="pprice">₹0 / month</div>
+          <ul><li>Standard rewards</li><li>Standard payout speed</li><li>Leaderboard access</li></ul>
+          <button class="btn-ghost" id="currentPlanBtnFree" disabled>Current Plan</button>
+        </div>
+        <div class="plan-card highlight" id="premiumCard">
+          <div class="ptitle">Premium</div><div class="pprice">₹99 / month</div>
+          <ul><li>2x rewards on tasks, spin & scratch</li><li>Priority payout</li><li>Premium badge on leaderboard</li></ul>
+          <button class="btn-premium" id="upgradeBtn">Upgrade to Premium</button>
+        </div>
+      </div>
+      <div class="note">Payment is processed by Razorpay. In test mode, use Razorpay's test card numbers — no real money moves until you switch to live keys.</div>
+
+      <div class="page-head" style="margin-top:28px;"><h1 style="font-size:1.1rem;">Account</h1></div>
+      <div class="status-card" style="margin-bottom:14px;">
+        <div style="display:flex; justify-content:space-between; padding:6px 0;"><span style="color:var(--text-dim); font-size:0.85rem;">Name</span><span id="settingsName" style="font-weight:600; font-size:0.85rem;">—</span></div>
+        <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);"><span style="color:var(--text-dim); font-size:0.85rem;">Email</span><span id="settingsEmail" style="font-weight:600; font-size:0.85rem;">—</span></div>
+        <div style="display:flex; justify-content:space-between; padding:6px 0; border-top:1px solid var(--line);"><span style="color:var(--text-dim); font-size:0.85rem;">Plan</span><span id="settingsPlan" style="font-weight:600; font-size:0.85rem;">Free</span></div>
+      </div>
+      <button class="btn-ghost btn-full" id="changePwBtn" style="margin-bottom:10px;">Change Password</button>
+      <button class="btn-ghost btn-full" id="moreLogoutBtn">Log out</button>
+    </section>
+
+    <!-- change password modal -->
+    <div id="pwModalBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:60; align-items:center; justify-content:center; padding:20px;">
+      <div style="background:var(--surface); border-radius:16px; padding:26px; max-width:360px; width:100%;">
+        <h3 style="margin-bottom:16px;">Change password</h3>
+        <div class="field"><label>Current password</label><input type="password" id="curPwInput"></div>
+        <div class="field"><label>New password</label><input type="password" id="newPwInput"></div>
+        <div class="auth-error" id="pwError"></div>
+        <button class="btn-claim btn-full" id="pwSubmitBtn">Update Password</button>
+        <button class="btn-ghost btn-full" id="pwCancelBtn" style="margin-top:8px;">Cancel</button>
+      </div>
+    </div>
+
+  </main>
+
+  <nav class="tabbar">
+    <div class="tabbar-inner">
+      <button class="tab-btn active" data-page="dashboard"><span class="ic">🏠</span>Home</button>
+      <button class="tab-btn" data-page="tasks"><span class="ic">🎯</span>Tasks</button>
+      <button class="tab-btn" data-page="wallet"><span class="ic">👛</span>Wallet</button>
+      <button class="tab-btn" data-page="refer"><span class="ic">🎁</span>Refer</button>
+      <button class="tab-btn" data-page="tournament"><span class="ic">🏆</span>Tourney</button>
+      <button class="tab-btn" data-page="more"><span class="ic">⋯</span>More</button>
+    </div>
+  </nav>
+</div>
+
+<div id="toast"></div>
+
+<script>
+  const el = (id) => document.getElementById(id);
+  // Same-origin path — works because this file is now served by the same backend.
+  let API_BASE = '/api';
+  let authToken = localStorage.getItem('earnyday_token') || null;
+  let isSignupMode = false;
+  let isPremium = false;
+
+  // ---------- API helper ----------
+  async function api(path, options = {}) {
+    const res = await fetch(API_BASE + path, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authToken ? { Authorization: 'Bearer ' + authToken } : {}),
+        ...(options.headers || {}),
+      },
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load referral info.' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Request failed');
+    return data;
   }
-});
-// ---------- WALLET ROUTES ----------
-app.get('/api/wallet/me', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT id, name, email, is_premium, wallet_coins, total_earned, ads_watched_today FROM users WHERE id = $1',
-      [req.userId]
-    );
-    const user = rows[0];
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const cfg = await getConfig();
-    res.json({ ...user, walletInr: +(user.wallet_coins * cfg.coin_to_inr).toFixed(2), minWithdrawInr: +cfg.min_withdraw_inr });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load wallet.' });
-  }
-});
 
-app.post('/api/auth/change-password', requireAuth, async (req, res) => {
-  try {
-    const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both current and new password are required' });
-    if (newPassword.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
-
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const user = rows[0];
-    if (!bcrypt.compareSync(currentPassword, user.password_hash)) return res.status(401).json({ error: 'Current password is incorrect' });
-
-    const hash = bcrypt.hashSync(newPassword, 10);
-    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [hash, user.id]);
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not change password.' });
-  }
-});
-
-app.get('/api/wallet/history', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT ad_name, coins, created_at FROM ad_claims WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-      [req.userId]
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load history.' });
-  }
-});
-
-// ---------- ADS ROUTES ----------
-const AD_POOL = [
-  { name: 'TravelEase — Flight Deals', meta: 'Skippable in 5s · Video' },
-  { name: 'ShopKart Summer Sale', meta: 'Banner + Video · 5s' },
-  { name: 'QuickLoan App', meta: 'Video · 5s' },
-  { name: 'StreamPlay Premium', meta: 'Video · 5s' },
-  { name: 'FreshMart Grocery', meta: 'Banner + Video · 5s' },
-];
-async function resetDailyIfNeeded(user) {
-  const today = new Date().toISOString().slice(0, 10);
-  const lastActive = user.last_active_date instanceof Date
-    ? user.last_active_date.toISOString().slice(0, 10)
-    : String(user.last_active_date);
-  if (lastActive !== today) {
-    await pool.query('UPDATE users SET ads_watched_today = 0, last_active_date = $1 WHERE id = $2', [today, user.id]);
-    user.ads_watched_today = 0;
-  }
-  return user;
-}
-app.get('/api/ads/queue', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    let user = rows[0];
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    user = await resetDailyIfNeeded(user);
-    const cfg = await getConfig();
-    const atLimit = !user.is_premium && user.ads_watched_today >= cfg.daily_free_limit;
-    res.json({ ads: AD_POOL, isPremium: !!user.is_premium, adsWatchedToday: user.ads_watched_today, dailyLimit: cfg.daily_free_limit, atLimit, coinPerAd: cfg.coin_per_ad });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load ads.' });
-  }
+  // ---------- auth screen ----------
+  // ---------- password show/hide ----------
+  el('pwToggleBtn').addEventListener('click', () => {
+    const input = el('passwordInput');
+    const showing = input.type === 'text';
+    input.type = showing ? 'password' : 'text';
+    el('pwToggleBtn').textContent = showing ? 'Show' : 'Hide';
   });
-app.post('/api/ads/claim', requireAuth, async (req, res) => {
-  try {
-    const { adName } = req.body;
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    let user = rows[0];
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    user = await resetDailyIfNeeded(user);
-    const cfg = await getConfig();
-    if (!user.is_premium && user.ads_watched_today >= cfg.daily_free_limit) {
-      return res.status(403).json({ error: 'Daily free limit reached', dailyLimit: cfg.daily_free_limit });
-    }
-    const coins = cfg.coin_per_ad;
-    await pool.query(
-      'UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1, ads_watched_today = ads_watched_today + 1 WHERE id = $2',
-      [coins, user.id]
-    );
-    await pool.query('INSERT INTO ad_claims (user_id, ad_name, coins) VALUES ($1, $2, $3)', [user.id, adName || 'Unknown ad', coins]);
-    const updatedRes = await pool.query('SELECT wallet_coins, total_earned, ads_watched_today FROM users WHERE id = $1', [user.id]);
-    res.json({ coinsAwarded: coins, ...updatedRes.rows[0] });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not claim reward.' });
+
+  let pendingEmail = ''; // email waiting on OTP verification
+
+  function showAuthScreen() {
+    el('otpScreen').style.display = 'none';
+    el('authScreen').style.display = 'flex';
   }
-});
-
-// ---------- TASKS (CPA Offerwall — higher-paying tasks like signups, app installs, surveys) ----------
-app.get('/api/tasks/wall-url', requireAuth, async (req, res) => {
-  if (!process.env.MYLEAD_LOCKER_ID) {
-    return res.status(503).json({ error: 'Offerwall not configured yet.' });
+  function showOtpScreen(email) {
+    pendingEmail = email;
+    el('otpEmailDisplay').textContent = email;
+    el('otpError').textContent = '';
+    el('otpInput').value = '';
+    el('authScreen').style.display = 'none';
+    el('otpScreen').style.display = 'flex';
   }
-  const url = `https://reward-me.eu/${process.env.MYLEAD_LOCKER_ID}?player_id=${req.userId}`;
-  res.json({ url });
-});
 
-// CPAlead calls this URL automatically (server-to-server) whenever a user completes a task.
-// Configure this exact URL as your "Postback URL" in the CPAlead dashboard:
-//   https://your-backend-url/api/tasks/postback?subid={subid}&payout={payout}&trans_id={trans_id}&offer_id={offer_id}
-app.get('/api/tasks/postback', async (req, res) => {
-  try {
-    const { subid, payout, trans_id, offer_id } = req.query;
-    if (!subid || !payout || !trans_id) return res.status(400).send('Missing parameters');
+  el('authSwitchLink').addEventListener('click', () => {
+    isSignupMode = !isSignupMode;
+    el('authTitle').textContent = isSignupMode ? 'Sign up' : 'Log in';
+    el('authSub').textContent = isSignupMode ? 'Create an account to start earning.' : 'Welcome back — watch ads, earn coins.';
+    el('authSubmitBtn').textContent = isSignupMode ? 'Sign up' : 'Log in';
+    el('nameField').style.display = isSignupMode ? 'block' : 'none';
+    el('authSwitchText').textContent = isSignupMode ? 'Already have an account?' : "Don't have an account?";
+    el('authSwitchLink').textContent = isSignupMode ? 'Log in' : 'Sign up';
+    el('authError').textContent = '';
+  });
 
-    const userId = parseInt(subid, 10);
-    const payoutUsd = parseFloat(payout);
-    if (!userId || isNaN(payoutUsd)) return res.status(400).send('Invalid parameters');
+  el('authSubmitBtn').addEventListener('click', async () => {
+    const email = el('emailInput').value.trim();
+    const password = el('passwordInput').value;
+    const name = el('nameInput').value.trim();
+    el('authError').textContent = '';
 
-    // idempotency — CPAlead may retry the same postback
-    const existing = await pool.query('SELECT id FROM offer_completions WHERE network_trans_id = $1', [trans_id]);
-    if (existing.rows.length > 0) return res.send('OK (already processed)');
+    const btn = el('authSubmitBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="spinner"></span> Connecting…';
 
-    const cfg = await getConfig();
-    const payoutInr = payoutUsd * cfg.usd_to_inr_rate;
-    const userShareInr = payoutInr * (cfg.cpa_user_share_percent / 100);
-    let coinsAwarded = Math.round(userShareInr / cfg.coin_to_inr);
-
-    const userRes = await pool.query('SELECT is_premium FROM users WHERE id = $1', [userId]);
-    if (userRes.rows[0]?.is_premium) coinsAwarded *= 2;
-
-    await pool.query('INSERT INTO offer_completions (user_id, network_trans_id, offer_id, payout_usd, coins_awarded) VALUES ($1, $2, $3, $4, $5)',
-      [userId, trans_id, offer_id || null, payoutUsd, coinsAwarded]);
-    await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2',
-      [coinsAwarded, userId]);
-    await logActivity(userId, '🎯', 'Task completed', `+${coinsAwarded} coins`);
-
-    res.send('OK');
-  } catch (err) {
-    console.error('Postback error:', err);
-    res.status(500).send('Error');
+    try {
+      if (isSignupMode) {
+        const refCode = new URLSearchParams(window.location.search).get('ref');
+        const data = await api('/auth/signup', { method: 'POST', body: JSON.stringify({ name, email, password, ref: refCode }) });
+        showOtpScreen(data.email || email);
+      } else {
+        const data = await api('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+        if (data.needsVerification) { showOtpScreen(email); return; }
+        authToken = data.token;
+        localStorage.setItem('earnyday_token', authToken);
+        await enterApp(data.user.name);
       }
+    } catch (err) {
+      el('authError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = originalLabel;
+    }
   });
 
-app.get('/api/tasks/history', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT offer_id, coins_awarded, created_at FROM offer_completions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50',
-      [req.userId]
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load task history.' });
-  }
-});
-
-// ---------- EXTRA EARNING FEATURES ----------
-const MILESTONES = [
-  { key: 'bronze', threshold: 500, coins: 50, column: 'badge_bronze_paid' },
-  { key: 'silver', threshold: 2000, coins: 150, column: 'badge_silver_paid' },
-  { key: 'gold', threshold: 5000, coins: 400, column: 'badge_gold_paid' },
-  { key: 'platinum', threshold: 15000, coins: 1000, column: 'badge_platinum_paid' },
-];
-const STREAK_REWARDS = [5, 8, 10, 12, 15, 20, 40]; // day 1..7, then cycles
-const SPIN_REWARDS = [2, 5, 5, 10, 10, 15, 20, 50];
-const SCRATCH_REWARDS = [3, 5, 8, 12, 20, 30];
-
-function pickRandom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
-function todayStr() { return new Date().toISOString().slice(0, 10); }
-
-async function awardCoins(userId, coins) {
-  const { rows } = await pool.query('SELECT is_premium FROM users WHERE id = $1', [userId]);
-  const finalCoins = rows[0]?.is_premium ? coins * 2 : coins;
-  await pool.query('UPDATE users SET wallet_coins = wallet_coins + $1, total_earned = total_earned + $1 WHERE id = $2', [finalCoins, userId]);
-  return finalCoins;
-}
-
-async function logActivity(userId, icon, title, subtitle) {
-  try {
-    await pool.query('INSERT INTO activity_log (user_id, icon, title, subtitle) VALUES ($1, $2, $3, $4)', [userId, icon, title, subtitle || null]);
-  } catch (err) { console.error('logActivity failed:', err.message); }
-}
-
-app.get('/api/notifications', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT icon, title, subtitle, created_at FROM activity_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 30',
-      [req.userId]
-    );
-    res.json(rows);
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Could not load notifications.' }); }
-});
-
-app.get('/api/earn/status', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    if (!u) return res.status(404).json({ error: 'User not found' });
-    const today = todayStr();
-    const fmt = (d) => (d instanceof Date ? d.toISOString().slice(0, 10) : d);
-    res.json({
-      canCheckin: fmt(u.last_checkin_date) !== today,
-      checkinStreak: u.checkin_streak,
-      canSpin: fmt(u.last_spin_date) !== today,
-      canScratch: fmt(u.last_scratch_date) !== today,
-      profileCompleted: !!(u.dob && u.gender),
-      profileBonusPaid: u.profile_bonus_paid,
-      badges: MILESTONES.map(m => ({ key: m.key, threshold: m.threshold, coins: m.coins, unlocked: u.total_earned >= m.threshold, claimed: u[m.column] })),
-    });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Could not load status.' }); }
-});
-
-app.post('/api/earn/checkin', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    const today = todayStr();
-    const lastDate = u.last_checkin_date ? new Date(u.last_checkin_date).toISOString().slice(0, 10) : null;
-    if (lastDate === today) return res.status(400).json({ error: 'Already checked in today.' });
-
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-    const newStreak = lastDate === yesterday ? (u.checkin_streak % 7) + 1 : 1;
-    const coins = STREAK_REWARDS[newStreak - 1];
-
-    await pool.query('UPDATE users SET checkin_streak = $1, last_checkin_date = $2 WHERE id = $3', [newStreak, today, u.id]);
-    const finalCoins = await awardCoins(u.id, coins);
-    await logActivity(u.id, '📅', 'Daily check-in bonus', `Day ${newStreak} streak · +${finalCoins} coins`);
-    res.json({ coinsAwarded: finalCoins, streak: newStreak });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Check-in failed.' }); }
-});
-
-app.post('/api/earn/spin', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    const today = todayStr();
-    const lastDate = u.last_spin_date ? new Date(u.last_spin_date).toISOString().slice(0, 10) : null;
-    if (lastDate === today) return res.status(400).json({ error: 'Already spun today.' });
-
-    const coins = pickRandom(SPIN_REWARDS);
-    await pool.query('UPDATE users SET last_spin_date = $1 WHERE id = $2', [today, u.id]);
-    const finalCoins = await awardCoins(u.id, coins);
-    await logActivity(u.id, '🎡', 'Spin & Win reward', `+${finalCoins} coins`);
-    res.json({ coinsAwarded: finalCoins });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Spin failed.' }); }
-});
-
-app.post('/api/earn/scratch', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    const today = todayStr();
-    const lastDate = u.last_scratch_date ? new Date(u.last_scratch_date).toISOString().slice(0, 10) : null;
-    if (lastDate === today) return res.status(400).json({ error: 'Already scratched today.' });
-
-    const coins = pickRandom(SCRATCH_REWARDS);
-    await pool.query('UPDATE users SET last_scratch_date = $1 WHERE id = $2', [today, u.id]);
-    const finalCoins = await awardCoins(u.id, coins);
-    await logActivity(u.id, '🎫', 'Scratch card reward', `+${finalCoins} coins`);
-    res.json({ coinsAwarded: finalCoins });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Scratch failed.' }); }
-});
-
-app.post('/api/earn/complete-profile', requireAuth, async (req, res) => {
-  try {
-    const { dob, gender } = req.body;
-    if (!dob || !gender) return res.status(400).json({ error: 'dob and gender are required' });
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    if (u.profile_bonus_paid) return res.status(400).json({ error: 'Profile bonus already claimed.' });
-
-    const coins = 30;
-    await pool.query('UPDATE users SET dob = $1, gender = $2, profile_bonus_paid = TRUE WHERE id = $3', [dob, gender, u.id]);
-    const finalCoins = await awardCoins(u.id, coins);
-    await logActivity(u.id, '📝', 'Profile completed', `+${finalCoins} coins`);
-    res.json({ coinsAwarded: finalCoins });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Could not save profile.' }); }
-});
-
-app.post('/api/earn/claim-badge', requireAuth, async (req, res) => {
-  try {
-    const { key } = req.body;
-    const milestone = MILESTONES.find(m => m.key === key);
-    if (!milestone) return res.status(400).json({ error: 'Invalid badge.' });
-
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const u = rows[0];
-    if (u[milestone.column]) return res.status(400).json({ error: 'Badge already claimed.' });
-    if (u.total_earned < milestone.threshold) return res.status(400).json({ error: 'Not unlocked yet.' });
-
-    await pool.query(`UPDATE users SET ${milestone.column} = TRUE WHERE id = $1`, [u.id]);
-    const finalCoins = await awardCoins(u.id, milestone.coins);
-    await logActivity(u.id, '🏅', `${milestone.key} badge unlocked`, `+${finalCoins} coins`);
-    res.json({ coinsAwarded: finalCoins });
-  } catch (err) { console.error(err); res.status(500).json({ error: 'Could not claim badge.' }); }
-});
-
-// ---------- LEADERBOARD ----------
-app.get('/api/leaderboard/top10', optionalAuth, async (req, res) => {
-  try {
-    const top10Res = await pool.query('SELECT id, name, total_earned FROM users ORDER BY total_earned DESC LIMIT 10');
-    let yourRank = null;
-    if (req.userId) {
-      const betterRes = await pool.query(
-        'SELECT COUNT(*) AS c FROM users WHERE total_earned > (SELECT total_earned FROM users WHERE id = $1)',
-        [req.userId]
-      );
-      yourRank = parseInt(betterRes.rows[0].c, 10) + 1;
+  el('otpSubmitBtn').addEventListener('click', async () => {
+    const otp = el('otpInput').value.trim();
+    el('otpError').textContent = '';
+    const btn = el('otpSubmitBtn');
+    const originalLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="spinner"></span> Verifying…';
+    try {
+      const data = await api('/auth/verify-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail, otp }) });
+      authToken = data.token;
+      localStorage.setItem('earnyday_token', authToken);
+      await enterApp(data.user.name);
+    } catch (err) {
+      el('otpError').textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      btn.classList.remove('loading');
+      btn.textContent = originalLabel;
     }
-    res.json({ top10: top10Res.rows, yourRank });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load leaderboard.' });
-  }
-});
+  });
 
-// ---------- WITHDRAW ----------
-app.post('/api/withdraw/request', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.userId]);
-    const user = rows[0];
-    if (!user) return res.status(404).json({ error: 'User not found' });
-    const cfg = await getConfig();
-    const availableInr = user.wallet_coins * cfg.coin_to_inr;
-    if (availableInr < cfg.min_withdraw_inr) return res.status(400).json({ error: `Minimum withdrawal is ₹${cfg.min_withdraw_inr}`, availableInr });
-    const coinsToDeduct = user.wallet_coins;
-    const amountInr = +(coinsToDeduct * cfg.coin_to_inr).toFixed(2);
-    await pool.query('UPDATE users SET wallet_coins = 0 WHERE id = $1', [user.id]);
-    const insertRes = await pool.query(
-      'INSERT INTO withdrawals (user_id, amount_inr, coins_deducted) VALUES ($1, $2, $3) RETURNING id',
-      [user.id, amountInr, coinsToDeduct]
-    );
-    res.json({ withdrawalId: insertRes.rows[0].id, amountInr, status: 'pending' });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not submit withdrawal request.' });
+  function attachResendHandler() {
+    const link = document.getElementById('resendOtpLink');
+    if (link) link.addEventListener('click', resendOtpHandler);
   }
-});
-app.get('/api/withdraw/mine', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      'SELECT id, amount_inr, status, requested_at, paid_at FROM withdrawals WHERE user_id = $1 ORDER BY requested_at DESC',
-      [req.userId]
-    );
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load withdrawals.' });
-  }
-});
 
-// ---------- PAYMENT (Razorpay Premium purchase) — optional, won't crash server if keys are missing ----------
-let razorpay = null;
-if (process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET) {
-  razorpay = new Razorpay({ key_id: process.env.RAZORPAY_KEY_ID, key_secret: process.env.RAZORPAY_KEY_SECRET });
-}
-const PREMIUM_PRICE_PAISE = 9900;
-app.post('/api/payment/create-order', requireAuth, async (req, res) => {
-  if (!razorpay) return res.status(503).json({ error: 'Payments are not configured yet. Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET.' });
-  try {
-    const order = await razorpay.orders.create({ amount: PREMIUM_PRICE_PAISE, currency: 'INR', receipt: `premium_${req.userId}_${Date.now()}` });
-    res.json({ order, keyId: process.env.RAZORPAY_KEY_ID });
-  } catch (err) { res.status(500).json({ error: 'Could not create payment order' }); }
-});
-app.post('/api/payment/verify', requireAuth, async (req, res) => {
-  if (!razorpay) return res.status(503).json({ error: 'Payments are not configured yet.' });
-  try {
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = req.body;
-    if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) return res.status(400).json({ error: 'Missing payment verification fields' });
-    const expected = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(`${razorpay_order_id}|${razorpay_payment_id}`).digest('hex');
-    if (expected !== razorpay_signature) return res.status(400).json({ error: 'Payment verification failed' });
-    await pool.query('UPDATE users SET is_premium = TRUE WHERE id = $1', [req.userId]);
-    res.json({ success: true, isPremium: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not verify payment.' });
+  async function resendOtpHandler() {
+    try {
+      await api('/auth/resend-otp', { method: 'POST', body: JSON.stringify({ email: pendingEmail }) });
+      el('otpError').textContent = '';
+      const row = el('resendRow');
+      row.classList.add('disabled');
+      let secs = 30;
+      row.innerHTML = `Didn't get a code? <a>Resend in ${secs}s</a>`;
+      const tick = setInterval(() => {
+        secs -= 1;
+        if (secs <= 0) {
+          clearInterval(tick);
+          row.classList.remove('disabled');
+          row.innerHTML = `Didn't get a code? <a id="resendOtpLink">Resend code</a>`;
+          attachResendHandler();
+        } else {
+          row.innerHTML = `Didn't get a code? <a>Resend in ${secs}s</a>`;
+        }
+      }, 1000);
+    } catch (err) {
+      el('otpError').textContent = err.message;
+    }
   }
-});
+  attachResendHandler();
 
-// ---------- ADMIN ----------
-app.get('/api/admin/stats', requireAdmin, async (req, res) => {
-  try {
-    const cfg = await getConfig();
-    const totalsRes = await pool.query('SELECT COALESCE(SUM(total_earned),0) AS totalcoins, COUNT(*) AS totalusers FROM users');
-    const totals = totalsRes.rows[0];
-    const adsServedRes = await pool.query('SELECT COUNT(*) AS c FROM ad_claims');
-    const adsServed = parseInt(adsServedRes.rows[0].c, 10);
-    const paidOutRes = await pool.query(`SELECT COALESCE(SUM(amount_inr),0) AS s FROM withdrawals WHERE status = 'paid'`);
-    const pendingOutRes = await pool.query(`SELECT COALESCE(SUM(amount_inr),0) AS s FROM withdrawals WHERE status = 'pending'`);
-    const userShare = cfg.user_share_percent / 100;
-    const platformShare = (1 - userShare) / userShare;
-    const userPayoutInr = totals.totalcoins * cfg.coin_to_inr;
-    res.json({totalUsers: parseInt(totals.totalusers, 10), adsServed,
-      userPayoutInr: +userPayoutInr.toFixed(2),
-      platformRevenueInr: +(userPayoutInr * platformShare).toFixed(2),
-      paidOutInr: +paidOutRes.rows[0].s, pendingWithdrawalsInr: +pendingOutRes.rows[0].s, config: cfg,
+  async function enterApp(name) {
+    el('welcomeName').textContent = 'Welcome, ' + name;
+    el('otpScreen').style.display = 'none';
+    el('authScreen').style.display = 'none';
+    el('app').style.display = 'block';
+    await refreshEverything();
+  }
+
+  function doLogout() {
+    authToken = null;
+    localStorage.removeItem('earnyday_token');
+    el('app').style.display = 'none';
+    showAuthScreen();
+  }
+  el('logoutBtn').addEventListener('click', doLogout);
+  el('moreLogoutBtn').addEventListener('click', doLogout);
+
+  el('changePwBtn').addEventListener('click', () => {
+    el('curPwInput').value = ''; el('newPwInput').value = ''; el('pwError').textContent = '';
+    el('pwModalBg').style.display = 'flex';
+  });
+  el('pwCancelBtn').addEventListener('click', () => { el('pwModalBg').style.display = 'none'; });
+  el('pwSubmitBtn').addEventListener('click', async () => {
+    const currentPassword = el('curPwInput').value;
+    const newPassword = el('newPwInput').value;
+    el('pwError').textContent = '';
+    if (!currentPassword || !newPassword) { el('pwError').textContent = 'Please fill in both fields.'; return; }
+    try {
+      await api('/auth/change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) });
+      el('pwModalBg').style.display = 'none';
+      showToast('Password updated successfully.');
+    } catch (err) { el('pwError').textContent = err.message; }
+  });
+
+  // ---------- tab navigation ----------
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      el('page-' + btn.dataset.page).classList.add('active');
+      if (btn.dataset.page === 'more') loadLeaderboard();
+      if (btn.dataset.page === 'tasks') loadTasksWall();
+      if (btn.dataset.page === 'wallet') loadHistory();
+      if (btn.dataset.page === 'tournament') loadTourneyGames();
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load stats.' });
+  });
+
+  // ============================================================
+  // TOURNAMENTS
+  // ============================================================
+  const GAME_ICONS = {
+    test_tube: '🧪', tap_race: '👆', number_puzzle: '🔢', sudoku: '🧩',
+    math_sprint: '➕', word_scramble: '🔤', memory_sequence: '🧠',
+    reaction_time: '⚡', quiz_marathon: '❓', pattern_match: '🔷', number_guess: '🔢',
+  };
+
+  let tState = { tournamentId: null, gameKey: null, mode: null, pollTimer: null, gameTimer: null, score: 0, timeLeft: 0, onTimeUp: null };
+
+  function showTourneyView(view) {
+    ['list', 'wait', 'play', 'quick', 'result'].forEach(v => {
+      el('tourney-' + v).style.display = (v === view) ? 'block' : 'none';
+    });
   }
-});
-app.get('/api/admin/withdrawals', requireAdmin, async (req, res) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT w.id, w.amount_inr, w.status, w.requested_at, w.paid_at, u.name, u.email
-      FROM withdrawals w JOIN users u ON u.id = w.user_id
-      ORDER BY w.requested_at DESC
-    `);
-    res.json(rows);
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load withdrawals.' });
+
+  async function loadTourneyGames() {
+    try {
+      const data = await api('/tournament/games');
+      el('tourneyPrizeNote').textContent = `Winner gets ${data.prizeCoins} coins · finish first to win`;
+      el('tourneyGamesGrid').innerHTML = data.games.map(g => {
+        const isHot = g.status === 'waiting' && g.playerCount >= g.maxPlayers * 0.6;
+        const isFull = g.status === 'active';
+        const badgeClass = isHot ? 'hot' : 'live';
+        const badgeText = isFull ? 'IN PROGRESS' : 'LIVE';
+        const modeLabel = g.mode === 'timed' ? `${g.duration_seconds}s` : 'Speed';
+        return `
+        <div class="tcard">
+          <div class="thumb">${GAME_ICONS[g.key] || '🎮'}</div>
+          <div class="body">
+            <div class="title-row"><strong>${g.name}</strong><span class="badge ${badgeClass}">${badgeText}</span></div>
+            <div class="players">👥 ${g.playerCount}/${g.maxPlayers} Players</div>
+            <div class="stats-row">
+              <div>Entry Fee<b>💰 0</b></div>
+              <div>Prize<b>💰 ${data.prizeCoins}</b></div>
+              <div>Mode<b>${modeLabel}</b></div>
+            </div>
+            <button class="play-btn ${isHot ? 'hot' : ''}" onclick="joinTournament('${g.key}')" ${isFull ? 'disabled' : ''}>${isFull ? 'Full' : 'Play Now'} ›</button>
+          </div>
+        </div>`;
+      }).join('');
+      showTourneyView('list');
+    } catch (err) { showToast(err.message); }
   }
-});
-app.post('/api/admin/withdrawals/:id/mark-paid', requireAdmin, async (req, res) => {
-  try {
-    const result = await pool.query(
-      `UPDATE withdrawals SET status = 'paid', paid_at = NOW() WHERE id = $1 AND status = 'pending' RETURNING user_id, amount_inr`,
-      [req.params.id]
-    );
-    if (result.rowCount === 0) return res.status(404).json({ error: 'Withdrawal not found or already paid' });
-    const w = result.rows[0];
-    await logActivity(w.user_id, '✅', 'Withdrawal approved', `₹${w.amount_inr} has been sent`);
-    res.json({ success: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not update withdrawal.' });
+
+  window.joinTournament = async function (gameKey) {
+    try {
+      const data = await api('/tournament/join', { method: 'POST', body: JSON.stringify({ gameKey }) });
+      tState.tournamentId = data.tournament.id;
+      tState.gameKey = gameKey;
+      tState.mode = data.mode;
+      el('tourneyWaitCount').textContent = `${data.playerCount}/${data.tournament.max_players} joined`;
+      if (data.tournament.status === 'active') {
+        startTourneyGame(Math.round((new Date(data.tournament.ends_at) - Date.now()) / 1000));
+      } else {
+        showTourneyView('wait');
+        pollTourneyStatus();
+      }
+    } catch (err) { showToast(err.message); }
+  };
+
+  function pollTourneyStatus() {
+    clearInterval(tState.pollTimer);
+    tState.pollTimer = setInterval(async () => {
+      try {
+        const data = await api(`/tournament/${tState.tournamentId}/status`);
+        el('tourneyWaitCount').textContent = `${data.playerCount}/${data.tournament.max_players} joined`;
+        tState.mode = data.mode;
+        if (data.tournament.status === 'active') {
+          clearInterval(tState.pollTimer);
+          startTourneyGame(data.secondsLeft);
+        }
+      } catch (err) { /* silent */ }
+    }, 3000);
   }
-});
-app.get('/api/admin/config', requireAdmin, async (req, res) => {
-  res.json(await getConfig());
-});
-app.post('/api/admin/config', requireAdmin, async (req, res) => {
-  try {
-    const { coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate, referral_bonus_coins } = req.body;
-    await pool.query(
-      `UPDATE config SET
-        coin_per_ad = COALESCE($1, coin_per_ad),
-        coin_to_inr = COALESCE($2, coin_to_inr),
-        min_withdraw_inr = COALESCE($3, min_withdraw_inr),
-        daily_free_limit = COALESCE($4, daily_free_limit),
-        user_share_percent = COALESCE($5, user_share_percent),
-        cpa_user_share_percent = COALESCE($6, cpa_user_share_percent),
-        usd_to_inr_rate = COALESCE($7, usd_to_inr_rate),
-        referral_bonus_coins = COALESCE($8, referral_bonus_coins)
-      WHERE id = 1`,
-      [coin_per_ad, coin_to_inr, min_withdraw_inr, daily_free_limit, user_share_percent, cpa_user_share_percent, usd_to_inr_rate, referral_bonus_coins]
-    );
-    res.json(await getConfig());
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not update config.' });
+
+  el('tourneyCancelBtn').addEventListener('click', () => {
+    clearInterval(tState.pollTimer);
+    loadTourneyGames();
+  });
+  el('tourneyPlayAgainBtn').addEventListener('click', () => {
+    clearInterval(tState.pollTimer);
+    loadTourneyGames();
+  });
+
+  function startTourneyGame(secondsLeft) {
+    showTourneyView('play');
+    tState.score = 0;
+    tState.onTimeUp = null;
+    tState.timeLeft = secondsLeft && secondsLeft > 0 ? secondsLeft : 240;
+    el('tourneyScore').textContent = '0';
+    el('tourneyTimer').textContent = tState.timeLeft;
+    initMiniGame(tState.gameKey);
+    clearInterval(tState.gameTimer);
+    tState.gameTimer = setInterval(() => {
+      tState.timeLeft--;
+      el('tourneyTimer').textContent = tState.timeLeft;
+      if (tState.timeLeft <= 0) {
+        clearInterval(tState.gameTimer);
+        if (tState.onTimeUp) tState.onTimeUp();
+        else completeGame(tState.score, false);
+      }
+    }, 1000);
   }
-});
 
-// ============================================================
-// TOURNAMENTS — mixed speed-race / timed games, 20 players/room
-// ============================================================
-
-// mode: 'speed' = whoever finishes first wins, no fixed clock (finalizes the instant
-//                 someone submits completed:true — race-safe via a conditional UPDATE)
-// mode: 'timed' = fixed duration, highest score when the clock hits zero wins
-const TOURNAMENT_GAMES = [
-  { key: 'test_tube',       name: 'Test Tube Color Fill', icon: '🧪', mode: 'speed', levels: 5, maxDurationSeconds: 300 },
-  { key: 'tap_race',        name: 'Tap Race',             icon: '👆', mode: 'timed', duration_seconds: 30 },
-  { key: 'number_puzzle',   name: 'Number Puzzle',        icon: '🔢', mode: 'speed', maxDurationSeconds: 300 },
-  { key: 'sudoku',          name: 'Sudoku',                icon: '🧩', mode: 'speed', maxDurationSeconds: 300 },
-  { key: 'math_sprint',     name: 'Math Sprint',          icon: '➕', mode: 'speed', maxDurationSeconds: 240 },
-  { key: 'word_scramble',   name: 'Word Scramble',        icon: '🔤', mode: 'speed', maxDurationSeconds: 240 },
-  { key: 'memory_sequence', name: 'Memory Sequence',      icon: '🧠', mode: 'speed', maxDurationSeconds: 240 },
-  { key: 'reaction_time',   name: 'Reaction Test',        icon: '⚡', mode: 'speed', maxDurationSeconds: 240 },
-  { key: 'quiz_marathon',   name: 'Quiz Marathon',        icon: '❓', mode: 'speed', maxDurationSeconds: 240 },
-  { key: 'pattern_match',   name: 'Pattern Match',        icon: '🔷', mode: 'speed', maxDurationSeconds: 240 },
-  { key: 'number_guess',    name: 'Number Guess',         icon: '🔢', mode: 'speed', maxDurationSeconds: 240 },
-];
-const TOURNAMENT_GAME_MAP = Object.fromEntries(TOURNAMENT_GAMES.map(g => [g.key, g]));
-const TOURNAMENT_GAME_KEYS = TOURNAMENT_GAMES.map(g => g.key);
-const TOURNAMENT_MAX_PLAYERS = 20;
-const TOURNAMENT_PRIZE_COINS = 300;
-
-function durationForGame(game) {
-  return game.mode === 'timed' ? game.duration_seconds : game.maxDurationSeconds;
-}
-
-async function initTournamentTables() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS tournaments (
-      id SERIAL PRIMARY KEY,
-      game_key TEXT NOT NULL,
-      status TEXT NOT NULL DEFAULT 'waiting',
-      max_players INTEGER NOT NULL DEFAULT ${TOURNAMENT_MAX_PLAYERS},
-      prize_coins INTEGER NOT NULL DEFAULT ${TOURNAMENT_PRIZE_COINS},
-      duration_seconds INTEGER NOT NULL DEFAULT 240,
-      started_at TIMESTAMPTZ,
-      ends_at TIMESTAMPTZ,
-      winner_user_id INTEGER,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE TABLE IF NOT EXISTS tournament_players (
-      id SERIAL PRIMARY KEY,
-      tournament_id INTEGER NOT NULL REFERENCES tournaments(id),
-      user_id INTEGER NOT NULL,
-      score INTEGER NOT NULL DEFAULT 0,
-      completed BOOLEAN NOT NULL DEFAULT FALSE,
-      submitted BOOLEAN NOT NULL DEFAULT FALSE,
-      joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      submitted_at TIMESTAMPTZ,
-      UNIQUE(tournament_id, user_id)
-    );
-  `);
-  await pool.query(`ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT FALSE;`);
-}
-
-// Ranking order depends on the game's mode:
-//   speed -> whoever finished (completed) earliest wins; unfinished players rank after by score
-//   timed -> highest score wins regardless of completion
-function leaderboardOrderClause(mode) {
-  return mode === 'speed'
-    ? 'ORDER BY p.completed DESC, p.submitted_at ASC NULLS LAST, p.score DESC'
-    : 'ORDER BY p.score DESC, p.submitted_at ASC NULLS LAST';
-}
-
-// Pays out the prize and marks a tournament finished. Race-safe: only the caller whose
-// conditional UPDATE actually flips status 'active' -> 'finished' gets to pay the winner.
-async function claimTournamentWin(tournamentId, winnerUserId) {
-  const claim = await pool.query(
-    `UPDATE tournaments SET status = 'finished', winner_user_id = $1 WHERE id = $2 AND status = 'active' RETURNING *`,
-    [winnerUserId, tournamentId]
-  );
-  if (claim.rowCount > 0) {
-    const finalCoins = await awardCoins(winnerUserId, claim.rows[0].prize_coins);
-    await logActivity(winnerUserId, '🏆', 'Tournament won!', `+${finalCoins} coins`);
+  function addTourneyScore(points) {
+    tState.score += points;
+    el('tourneyScore').textContent = tState.score;
   }
-  return claim.rows[0] || null;
-}
 
-// Closes out a tournament whose clock has run out (timed games, or the speed-game safety cap
-// if nobody finished in time). Safe to call more than once — only acts on 'active' rooms.
-async function finalizeTournamentIfDue(tournament) {
-  if (tournament.status !== 'active') return tournament;
-  const isTimeUp = tournament.ends_at && new Date(tournament.ends_at) <= new Date();
-  if (!isTimeUp) return tournament;
+  // Every mini-game calls this when it's done (or when time runs out).
+  // completed=true means "I finished the whole task" — that's what wins speed-mode rooms.
+  async function completeGame(score, completed) {
+    clearInterval(tState.gameTimer);
+    el('tourneyGameArea').innerHTML = '';
+    try {
+      const data = await api(`/tournament/${tState.tournamentId}/submit-score`, { method: 'POST', body: JSON.stringify({ score, completed: !!completed }) });
+      showQuickResult(score, data.myRank);
+    } catch (err) {
+      showQuickResult(score, null);
+    }
+  }
 
-  const game = TOURNAMENT_GAME_MAP[tournament.game_key] || { mode: 'timed' };
-  const order = leaderboardOrderClause(game.mode);
-  const winnerRes = await pool.query(
-    `SELECT p.user_id FROM tournament_players p WHERE p.tournament_id = $1 ${order} LIMIT 1`,
-    [tournament.id]
-  );
-  const winner = winnerRes.rows[0];
-  const claimed = winner ? await claimTournamentWin(tournament.id, winner.user_id) : null;
-  if (claimed) return claimed;
+  function showQuickResult(score, rank) {
+    showTourneyView('quick');
+    el('quickScore').textContent = score;
+    el('quickRank').textContent = rank ? '#' + rank : '—';
+    setTimeout(() => {
+      showTourneyView('result');
+      pollTourneyResult();
+    }, 4000);
+  }
 
-  // nobody to award, or already finalized by a concurrent request — just fetch current state
-  const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [tournament.id]);
-  return rows[0];
-}
+  async function pollTourneyResult() {
+    clearInterval(tState.pollTimer);
+    const check = async () => {
+      try {
+        const data = await api(`/tournament/${tState.tournamentId}/leaderboard`);
+        const board = data.board;
+        el('tourneyResultBoard').innerHTML = board.map((p, i) => `
+          <div class="lb-row${i === 0 ? ' top1' : i === 1 ? ' top2' : i === 2 ? ' top3' : ''}">
+            <div class="lb-rank">${i + 1}</div>
+            <div class="lb-name">${p.name}${p.submitted ? '' : ' (still playing…)'}</div>
+            <div class="lb-coins mono">${p.score}</div>
+          </div>`).join('');
+        if (data.tournament.status === 'finished') {
+          clearInterval(tState.pollTimer);
+          const winner = board[0];
+          el('tourneyResultHead').textContent = winner ? `🏆 ${winner.name} won ${data.tournament.prize_coins} coins!` : 'Tournament finished';
+          await refreshWalletStats();
+        }
+      } catch (err) { /* silent */ }
+    };
+    await check();
+    tState.pollTimer = setInterval(check, 4000);
+  }
 
-// Finds an open ("waiting") room for a game with a free slot, or creates a fresh one.
-async function getOrCreateWaitingRoom(gameKey) {
-  const game = TOURNAMENT_GAME_MAP[gameKey];
-  const openRes = await pool.query(
-    `SELECT t.* FROM tournaments t
-     WHERE t.game_key = $1 AND t.status = 'waiting'
-       AND (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) < t.max_players
-     ORDER BY t.created_at ASC LIMIT 1`,
-    [gameKey]
-  );
-  if (openRes.rows[0]) return openRes.rows[0];
-  const insertRes = await pool.query(
-    `INSERT INTO tournaments (game_key, max_players, prize_coins, duration_seconds)
-     VALUES ($1, $2, $3, $4) RETURNING *`,
-    [gameKey, TOURNAMENT_MAX_PLAYERS, TOURNAMENT_PRIZE_COINS, durationForGame(game)]
-  );
-  return insertRes.rows[0];
-}
+  // ---------- mini-game engines ----------
+  function initMiniGame(key) {
+    const area = el('tourneyGameArea');
+    if (key === 'test_tube') return initTestTube(area);
+    if (key === 'tap_race') return initTapRace(area);
+    if (key === 'number_puzzle') return initNumberPuzzle(area);
+    if (key === 'sudoku') return initSudoku(area);
+    if (key === 'math_sprint') return initMathSprint(area);
+    if (key === 'word_scramble') return initWordScramble(area);
+    if (key === 'memory_sequence') return initMemorySequence(area);
+    if (key === 'reaction_time') return initReactionTime(area);
+    if (key === 'quiz_marathon') return initQuizMarathon(area);
+    if (key === 'pattern_match') return initPatternMatch(area);
+    if (key === 'number_guess') return initNumberGuess(area);
+  }
 
-app.get('/api/tournament/games', optionalAuth, async (req, res) => {
-  try {
-    const summaries = [];
-    for (const g of TOURNAMENT_GAMES) {
-      const roomRes = await pool.query(
-        `SELECT t.id, t.status,
-           (SELECT COUNT(*) FROM tournament_players p WHERE p.tournament_id = t.id) AS player_count
-         FROM tournaments t
-         WHERE t.game_key = $1 AND t.status IN ('waiting','active')
-         ORDER BY t.created_at DESC LIMIT 1`,
-        [g.key]
-      );
-      const room = roomRes.rows[0];
-      summaries.push({
-        ...g,
-        roomId: room ? room.id : null,
-        status: room ? room.status : 'none',
-        playerCount: room ? parseInt(room.player_count, 10) : 0,
-        maxPlayers: TOURNAMENT_MAX_PLAYERS,
+  // 🧪 Test Tube Color Fill — 5 levels. Each level flashes a color sequence, then you
+  // tap the colors back in the same order. Clear all 5 levels first to win the room.
+  function initTestTube(area) {
+    const palette = ['#ef4444', '#22c55e', '#3b82f6', '#f5a623', '#a855f7'];
+    let level = 1;
+    function renderLevel() {
+      const len = level + 2; // level 1 = 3 colors, level 5 = 7 colors
+      const seq = Array.from({ length: len }, () => palette[Math.floor(Math.random() * palette.length)]);
+      area.dataset.seq = JSON.stringify(seq);
+      area.dataset.step = '0';
+      area.innerHTML = `
+        <div style="text-align:center; padding:10px 0;">
+          <div style="color:var(--text-dim); font-size:0.8rem; margin-bottom:6px;">Level ${level} of 5</div>
+          <div id="ttPreview" style="display:flex; gap:8px; justify-content:center; margin-bottom:18px;">
+            ${seq.map(c => `<div style="width:34px;height:34px;border-radius:8px;background:${c};"></div>`).join('')}
+          </div>
+          <div id="ttStatus" style="color:var(--text-dim); font-size:0.85rem; margin-bottom:14px;">Memorize the order…</div>
+          <div id="ttButtons" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; visibility:hidden;">
+            ${palette.map(c => `<button class="tt-opt" data-c="${c}" style="width:50px;height:50px;border-radius:50%;background:${c};border:3px solid transparent;"></button>`).join('')}
+          </div>
+        </div>`;
+      setTimeout(() => {
+        el('ttPreview').style.visibility = 'hidden';
+        el('ttStatus').textContent = 'Now tap them back in order!';
+        el('ttButtons').style.visibility = 'visible';
+      }, 1200 + len * 300);
+      area.querySelectorAll('.tt-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const step = parseInt(area.dataset.step, 10);
+          const seqArr = JSON.parse(area.dataset.seq);
+          if (btn.dataset.c === seqArr[step]) {
+            btn.style.borderColor = '#fff';
+            setTimeout(() => btn.style.borderColor = 'transparent', 200);
+            const next = step + 1;
+            area.dataset.step = String(next);
+            if (next === seqArr.length) {
+              if (level >= 5) { addTourneyScore(5); completeGame(tState.score, true); }
+              else { level++; addTourneyScore(1); setTimeout(renderLevel, 400); }
+            }
+          } else {
+            el('ttStatus').textContent = 'Oops, wrong order — level restarted!';
+            setTimeout(renderLevel, 900);
+          }
+        });
       });
     }
-    res.json({ games: summaries, prizeCoins: TOURNAMENT_PRIZE_COINS });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load tournaments.' });
+    renderLevel();
   }
-});
 
-app.post('/api/tournament/join', requireAuth, async (req, res) => {
-  try {
-    const { gameKey } = req.body;
-    if (!TOURNAMENT_GAME_KEYS.includes(gameKey)) return res.status(400).json({ error: 'Unknown game.' });
-    const game = TOURNAMENT_GAME_MAP[gameKey];
-
-    // already in an open room for this game? just return it instead of double-joining
-    const existingRes = await pool.query(
-      `SELECT t.* FROM tournaments t
-       JOIN tournament_players p ON p.tournament_id = t.id
-       WHERE p.user_id = $1 AND t.game_key = $2 AND t.status IN ('waiting','active')
-       ORDER BY t.created_at DESC LIMIT 1`,
-      [req.userId, gameKey]
-    );
-    let tournament = existingRes.rows[0];
-
-    if (!tournament) {
-      tournament = await getOrCreateWaitingRoom(gameKey);
-      await pool.query('INSERT INTO tournament_players (tournament_id, user_id) VALUES ($1, $2)', [tournament.id, req.userId]);
-    }
-
-    const countRes = await pool.query('SELECT COUNT(*) AS c FROM tournament_players WHERE tournament_id = $1', [tournament.id]);
-    const playerCount = parseInt(countRes.rows[0].c, 10);
-
-    // room just filled up — start the match for everyone in it
-    if (tournament.status === 'waiting' && playerCount >= tournament.max_players) {
-      const endsAt = new Date(Date.now() + tournament.duration_seconds * 1000).toISOString();
-      await pool.query(`UPDATE tournaments SET status = 'active', started_at = NOW(), ends_at = $1 WHERE id = $2`, [endsAt, tournament.id]);
-      const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [tournament.id]);
-      tournament = rows[0];
-    }
-
-    res.json({ tournament, playerCount, mode: game.mode });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not join tournament.' });
-  }
-});
-
-app.get('/api/tournament/:id/status', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
-    let tournament = rows[0];
-    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
-    tournament = await finalizeTournamentIfDue(tournament);
-
-    const countRes = await pool.query('SELECT COUNT(*) AS c FROM tournament_players WHERE tournament_id = $1', [tournament.id]);
-    const mineRes = await pool.query('SELECT * FROM tournament_players WHERE tournament_id = $1 AND user_id = $2', [tournament.id, req.userId]);
-    res.json({
-      tournament,
-      playerCount: parseInt(countRes.rows[0].c, 10),
-      secondsLeft: tournament.ends_at ? Math.max(0, Math.round((new Date(tournament.ends_at) - Date.now()) / 1000)) : null,
-      me: mineRes.rows[0] || null,
-      mode: (TOURNAMENT_GAME_MAP[tournament.game_key] || {}).mode,
+  // 👆 Tap Race — fixed 30s, most taps wins (timed mode; time-up is handled by the shared timer).
+  function initTapRace(area) {
+    let taps = 0;
+    area.innerHTML = `
+      <div style="text-align:center; padding:20px 0;">
+        <p style="color:var(--text-dim); margin-bottom:16px;">Tap as fast as you can before time runs out!</p>
+        <button id="trBtn" style="width:180px; height:180px; border-radius:50%; background:linear-gradient(135deg,#ef4444,#b91c1c); border:none; color:#fff; font-size:1.4rem; font-weight:800;">TAP!</button>
+        <div style="margin-top:16px; font-size:1.1rem;">Taps: <span id="trCount" class="mono" style="font-weight:800;">0</span></div>
+      </div>`;
+    el('trBtn').addEventListener('click', () => {
+      taps++;
+      el('trCount').textContent = taps;
+      tState.score = taps;
+      el('tourneyScore').textContent = taps;
     });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load tournament status.' });
+    tState.onTimeUp = () => completeGame(taps, false);
   }
-});
 
-// Body: { score, completed }. `completed` only matters for speed-mode games — the first
-// player to submit completed:true wins the room immediately.
-app.post('/api/tournament/:id/submit-score', requireAuth, async (req, res) => {
-  try {
-    const { score, completed } = req.body;
-    if (typeof score !== 'number' || score < 0) return res.status(400).json({ error: 'Invalid score.' });
+  // 🔢 Number Puzzle — tap 1 through 9 in ascending order, as fast as possible.
+  function initNumberPuzzle(area) {
+    let next = 1;
+    const nums = Array.from({ length: 9 }, (_, i) => i + 1).sort(() => Math.random() - 0.5);
+    area.innerHTML = `
+      <div style="text-align:center; padding:16px 0;">
+        <p style="color:var(--text-dim); margin-bottom:14px;">Tap 1 → 9 in order, as fast as you can!</p>
+        <div style="display:grid; grid-template-columns:repeat(3,64px); gap:10px; justify-content:center;">
+          ${nums.map(n => `<button class="np-opt" data-n="${n}" style="width:64px;height:64px;border-radius:12px;background:var(--surface-alt); border:1px solid var(--line); color:var(--text); font-size:1.3rem; font-weight:700;">${n}</button>`).join('')}
+        </div>
+      </div>`;
+    area.querySelectorAll('.np-opt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const n = parseInt(btn.dataset.n, 10);
+        if (n === next) {
+          btn.style.background = 'var(--primary)';
+          btn.style.color = '#1a1200';
+          btn.disabled = true;
+          next++;
+          addTourneyScore(1);
+          if (next === 10) completeGame(tState.score, true);
+        }
+      });
+    });
+  }
 
-    const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
-    let tournament = rows[0];
-    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
-    if (tournament.status !== 'active') return res.status(400).json({ error: 'Tournament is not active.' });
-
-    const game = TOURNAMENT_GAME_MAP[tournament.game_key] || { mode: 'timed' };
-    const updateRes = await pool.query(
-      `UPDATE tournament_players SET score = $1, completed = $2, submitted = TRUE, submitted_at = NOW()
-       WHERE tournament_id = $3 AND user_id = $4 AND submitted = FALSE RETURNING *`,
-      [Math.round(score), !!completed, tournament.id, req.userId]
-    );
-    if (updateRes.rowCount === 0) return res.status(400).json({ error: 'Score already submitted or you are not in this tournament.' });
-
-    // speed mode: finishing first wins the room right now (race-safe conditional update)
-    if (game.mode === 'speed' && completed) {
-      const claimed = await claimTournamentWin(tournament.id, req.userId);
-      if (claimed) tournament = claimed;
-    } else {
-      tournament = await finalizeTournamentIfDue(tournament);
+  // 🧩 Sudoku (mini 4×4) — fill every empty cell so each row, column and 2×2 box has 1-4 once.
+  function initSudoku(area) {
+    function generatePuzzle() {
+      const base = [[1, 2, 3, 4], [3, 4, 1, 2], [2, 1, 4, 3], [4, 3, 2, 1]];
+      const grid = base.map(row => row.slice());
+      const cells = [];
+      for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) cells.push([r, c]);
+      const blanks = cells.sort(() => Math.random() - 0.5).slice(0, 7);
+      const puzzle = grid.map(row => row.slice());
+      blanks.forEach(([r, c]) => puzzle[r][c] = 0);
+      return { solution: grid, puzzle };
     }
-
-    // tell the player their rank among everyone who has submitted so far (for the quick post-game screen)
-    const rankRes = await pool.query(
-      `SELECT COUNT(*) + 1 AS rank FROM tournament_players
-       WHERE tournament_id = $1 AND submitted = TRUE AND user_id != $2
-         AND (completed > (SELECT completed FROM tournament_players WHERE tournament_id = $1 AND user_id = $2)
-              OR (completed = (SELECT completed FROM tournament_players WHERE tournament_id = $1 AND user_id = $2)
-                  AND score > $3))`,
-      [tournament.id, req.userId, Math.round(score)]
-    );
-
-    res.json({ success: true, tournament, myRank: parseInt(rankRes.rows[0].rank, 10) });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not submit score.' });
+    const { solution, puzzle } = generatePuzzle();
+    area.innerHTML = `
+      <div style="text-align:center; padding:14px 0;">
+        <p style="color:var(--text-dim); margin-bottom:12px; font-size:0.8rem;">Fill 1-4 so each row & column has no repeats.</p>
+        <div id="sdGrid" style="display:grid; grid-template-columns:repeat(4,56px); gap:4px; justify-content:center;"></div>
+        <button class="btn-claim" id="sdCheck" style="margin-top:16px;">Check Solution</button>
+      </div>`;
+    const grid = el('sdGrid');
+    puzzle.forEach((row, r) => row.forEach((val, c) => {
+      const cell = document.createElement(val === 0 ? 'select' : 'div');
+      cell.style.cssText = 'width:56px; height:56px; border-radius:8px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text); font-size:1.1rem; font-weight:700; display:flex; align-items:center; justify-content:center; text-align:center;';
+      if (val === 0) {
+        cell.innerHTML = `<option value="0"></option>` + [1, 2, 3, 4].map(n => `<option value="${n}">${n}</option>`).join('');
+        cell.dataset.r = r; cell.dataset.c = c;
+        cell.style.appearance = 'none'; cell.style.webkitAppearance = 'none'; cell.style.background = 'var(--surface-alt)';
+        cell.classList.add('sd-cell');
+      } else {
+        cell.textContent = val;
+        cell.style.color = 'var(--primary)';
+      }
+      grid.appendChild(cell);
+    }));
+    el('sdCheck').addEventListener('click', () => {
+      let ok = true;
+      area.querySelectorAll('.sd-cell').forEach(sel => {
+        const r = parseInt(sel.dataset.r, 10), c = parseInt(sel.dataset.c, 10);
+        if (parseInt(sel.value, 10) !== solution[r][c]) ok = false;
+      });
+      if (ok) { addTourneyScore(10); completeGame(tState.score, true); }
+      else { el('sdCheck').textContent = 'Not quite — try again'; setTimeout(() => el('sdCheck').textContent = 'Check Solution', 1200); }
+    });
   }
-});
 
-app.get('/api/tournament/:id/leaderboard', requireAuth, async (req, res) => {
-  try {
-    const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
-    let tournament = rows[0];
-    if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
-    tournament = await finalizeTournamentIfDue(tournament);
-
-    const game = TOURNAMENT_GAME_MAP[tournament.game_key] || { mode: 'timed' };
-    const boardRes = await pool.query(
-      `SELECT p.user_id, u.name, p.score, p.submitted, p.completed
-       FROM tournament_players p JOIN users u ON u.id = p.user_id
-       WHERE p.tournament_id = $1 ${leaderboardOrderClause(game.mode)}`,
-      [tournament.id]
-    );
-    res.json({ tournament, board: boardRes.rows, mode: game.mode });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Could not load leaderboard.' });
+  function initMathSprint(area) {
+    area.innerHTML = `
+      <div style="text-align:center; padding:20px 0;">
+        <div id="msQuestion" style="font-size:2rem; font-weight:700; margin-bottom:20px;"></div>
+        <input id="msInput" type="number" inputmode="numeric" style="width:140px; text-align:center; font-size:1.3rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);" placeholder="Answer">
+        <br><button class="btn-claim" style="margin-top:14px;" id="msSubmit">Submit</button>
+        <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Answer 15 correctly to win the room!</p>
+      </div>`;
+    let correct = 0;
+    function newQ() {
+      const a = Math.floor(Math.random() * 50) + 1, b = Math.floor(Math.random() * 50) + 1;
+      const ops = ['+', '-', '×'];
+      const op = ops[Math.floor(Math.random() * ops.length)];
+      const answer = op === '+' ? a + b : op === '-' ? a - b : a * b;
+      area.dataset.answer = answer;
+      el('msQuestion').textContent = `${a} ${op} ${b} = ?`;
+      el('msInput').value = '';
+    }
+    newQ();
+    el('msSubmit').addEventListener('click', () => {
+      const val = parseInt(el('msInput').value, 10);
+      if (val === parseInt(area.dataset.answer, 10)) {
+        addTourneyScore(10);
+        correct++;
+        if (correct >= 15) { completeGame(tState.score, true); return; }
+      }
+      newQ();
+      el('msInput').focus();
+    });
+    el('msInput').addEventListener('keydown', e => { if (e.key === 'Enter') el('msSubmit').click(); });
   }
-});
 
-const PORT = process.env.PORT || 4000;
-initDb()
-  .then(() => {
-    app.listen(PORT, () => console.log(`Earny Day API running on port ${PORT}`));
-  })
-  .catch((err) => {
-    console.error('Failed to initialize database:', err);
-    process.exit(1);
+  const WORD_LIST = ['APPLE', 'TIGER', 'PLANET', 'SILVER', 'BRIDGE', 'FLOWER', 'CASTLE', 'DRAGON', 'PENCIL', 'ORANGE', 'WINTER', 'GUITAR', 'ISLAND', 'ROCKET', 'PUZZLE'];
+  function scrambleWord(word) {
+    const arr = word.split('');
+    for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[arr[i], arr[j]] = [arr[j], arr[i]]; }
+    const result = arr.join('');
+    return result === word ? scrambleWord(word) : result;
+  }
+  function initWordScramble(area) {
+    let solved = 0;
+    area.innerHTML = `
+      <div style="text-align:center; padding:20px 0;">
+        <div id="wsScrambled" style="font-size:1.8rem; font-weight:700; letter-spacing:4px; margin-bottom:20px;"></div>
+        <input id="wsInput" type="text" style="width:180px; text-align:center; text-transform:uppercase; font-size:1.2rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);" placeholder="Your guess">
+        <br><button class="btn-claim" style="margin-top:14px;" id="wsSubmit">Submit</button>
+        <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Solve 10 words to win the room!</p>
+      </div>`;
+    function newWord() {
+      const word = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
+      area.dataset.answer = word;
+      el('wsScrambled').textContent = scrambleWord(word);
+      el('wsInput').value = '';
+    }
+    newWord();
+    el('wsSubmit').addEventListener('click', () => {
+      const val = el('wsInput').value.trim().toUpperCase();
+      if (val === area.dataset.answer) {
+        addTourneyScore(15);
+        solved++;
+        if (solved >= 10) { completeGame(tState.score, true); return; }
+      }
+      newWord();
+      el('wsInput').focus();
+    });
+    el('wsInput').addEventListener('keydown', e => { if (e.key === 'Enter') el('wsSubmit').click(); });
+  }
+
+  function initMemorySequence(area) {
+    const colors = ['#f5a623', '#8b5cf6', '#22c55e', '#ef4444'];
+    let sequence = [Math.floor(Math.random() * 4)], userStep = 0, level = 1, showing = false;
+    area.innerHTML = `
+      <div style="text-align:center; padding:10px 0;">
+        <div id="memLevel" style="color:var(--text-dim); margin-bottom:10px;">Level 1 — watch the sequence</div>
+        <div id="memGrid" style="display:grid; grid-template-columns:repeat(2,80px); gap:10px; justify-content:center;">
+          ${colors.map((c, i) => `<button data-i="${i}" style="width:80px;height:80px;border-radius:12px;background:${c};opacity:0.5;border:none;"></button>`).join('')}
+        </div>
+        <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Reach level 10 to win the room!</p>
+      </div>`;
+    function flash(i, cb) {
+      const btn = area.querySelector(`[data-i="${i}"]`);
+      btn.style.opacity = '1';
+      setTimeout(() => { btn.style.opacity = '0.5'; cb && cb(); }, 400);
+    }
+    function playSequence() {
+      showing = true;
+      let i = 0;
+      const step = () => {
+        if (i >= sequence.length) { showing = false; return; }
+        flash(sequence[i], () => { i++; setTimeout(step, 200); });
+      };
+      step();
+    }
+    function nextLevel() {
+      level++;
+      sequence.push(Math.floor(Math.random() * 4));
+      userStep = 0;
+      el('memLevel').textContent = 'Level ' + level + ' — watch the sequence';
+      setTimeout(playSequence, 600);
+    }
+    area.querySelectorAll('#memGrid button').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (showing) return;
+        const i = parseInt(btn.dataset.i, 10);
+        if (sequence[userStep] === i) {
+          userStep++;
+          if (userStep === sequence.length) {
+            addTourneyScore(level * 5);
+            if (level >= 10) { completeGame(tState.score, true); return; }
+            nextLevel();
+          }
+        } else {
+          sequence = [Math.floor(Math.random() * 4)]; level = 1; userStep = 0;
+          el('memLevel').textContent = 'Missed! Restarting at level 1';
+          setTimeout(playSequence, 800);
+        }
+      });
+    });
+    setTimeout(playSequence, 500);
+  }
+
+  function initReactionTime(area) {
+    let waitTimeout, startTime, waiting = false, rounds = 0;
+    area.innerHTML = `
+      <div id="reactBox" style="height:220px; border-radius:16px; background:var(--surface-alt); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.1rem; cursor:pointer; text-align:center; padding:0 20px;">Tap here to start</div>
+      <p style="text-align:center; color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Wait for green, then tap fast. Complete 8 rounds to win the room.</p>`;
+    const box = el('reactBox');
+    function armRound() {
+      box.style.background = 'var(--surface-alt)';
+      box.textContent = 'Wait for green…';
+      waiting = false;
+      waitTimeout = setTimeout(() => {
+        waiting = true;
+        startTime = Date.now();
+        box.style.background = '#22c55e';
+        box.textContent = 'TAP NOW!';
+      }, 1000 + Math.random() * 2500);
+    }
+    box.addEventListener('click', () => {
+      if (box.textContent === 'Tap here to start') { armRound(); return; }
+      if (!waiting) {
+        clearTimeout(waitTimeout);
+        box.style.background = '#ef4444';
+        box.textContent = 'Too soon! Tap to retry';
+        return;
+      }
+      const ms = Date.now() - startTime;
+      const points = Math.max(1, Math.round(30 - ms / 40));
+      addTourneyScore(points);
+      rounds++;
+      if (rounds >= 8) { completeGame(tState.score, true); return; }
+      box.textContent = `${ms}ms · +${points} pts — tap to go again`;
+      box.style.background = 'var(--surface-alt)';
+      waiting = false;
+      setTimeout(armRound, 900);
+    });
+  }
+
+  const QUIZ_BANK = [
+    { q: 'Capital of France?', options: ['Paris', 'Rome', 'Berlin', 'Madrid'], a: 0 },
+    { q: '2 + 2 × 2 = ?', options: ['6', '8', '4', '2'], a: 0 },
+    { q: 'Largest planet?', options: ['Earth', 'Mars', 'Jupiter', 'Venus'], a: 2 },
+    { q: 'H2O is commonly known as?', options: ['Salt', 'Water', 'Sugar', 'Oxygen'], a: 1 },
+    { q: 'Fastest land animal?', options: ['Lion', 'Cheetah', 'Horse', 'Tiger'], a: 1 },
+    { q: "India's capital?", options: ['Mumbai', 'Delhi', 'Chennai', 'Pune'], a: 1 },
+    { q: 'Number of continents?', options: ['5', '6', '7', '8'], a: 2 },
+  ];
+  function initQuizMarathon(area) {
+    let correct = 0;
+    function newQ() {
+      const item = QUIZ_BANK[Math.floor(Math.random() * QUIZ_BANK.length)];
+      area.dataset.answer = item.a;
+      area.innerHTML = `
+        <div style="text-align:center; padding:10px 0;">
+          <div style="font-size:1.2rem; font-weight:700; margin-bottom:16px;">${item.q}</div>
+          <div style="display:flex; flex-direction:column; gap:10px; max-width:280px; margin:0 auto;">
+            ${item.options.map((o, i) => `<button class="btn-ghost quiz-opt" data-i="${i}">${o}</button>`).join('')}
+          </div>
+          <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Answer 10 correctly to win the room!</p>
+        </div>`;
+      area.querySelectorAll('.quiz-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (parseInt(btn.dataset.i, 10) === parseInt(area.dataset.answer, 10)) {
+            addTourneyScore(10);
+            correct++;
+            if (correct >= 10) { completeGame(tState.score, true); return; }
+          }
+          newQ();
+        });
+      });
+    }
+    newQ();
+  }
+
+  function initPatternMatch(area) {
+    const shapes = ['🔴', '🔵', '🟢', '🟡', '🟣', '🟠'];
+    let rounds = 0;
+    function newRound() {
+      const target = shapes[Math.floor(Math.random() * shapes.length)];
+      const options = new Set([target]);
+      while (options.size < 4) options.add(shapes[Math.floor(Math.random() * shapes.length)]);
+      const optArr = Array.from(options).sort(() => Math.random() - 0.5);
+      area.innerHTML = `
+        <div style="text-align:center; padding:10px 0;">
+          <p style="color:var(--text-dim); margin-bottom:10px;">Tap the matching shape:</p>
+          <div style="font-size:3rem; margin-bottom:20px;">${target}</div>
+          <div style="display:flex; gap:12px; justify-content:center;">
+            ${optArr.map(s => `<button class="btn-ghost pm-opt" style="font-size:1.6rem;" data-s="${s}">${s}</button>`).join('')}
+          </div>
+          <p style="color:var(--text-dim); font-size:0.78rem; margin-top:16px;">Match 12 to win the room!</p>
+        </div>`;
+      area.querySelectorAll('.pm-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          if (btn.dataset.s === target) {
+            addTourneyScore(8);
+            rounds++;
+            if (rounds >= 12) { completeGame(tState.score, true); return; }
+          }
+          newRound();
+        });
+      });
+    }
+    newRound();
+  }
+
+  function initNumberGuess(area) {
+    let rounds = 0;
+    function newRound() {
+      const secret = Math.floor(Math.random() * 100) + 1;
+      area.dataset.secret = secret;
+      area.innerHTML = `
+        <div style="text-align:center; padding:20px 0;">
+          <p style="color:var(--text-dim); margin-bottom:14px;">Guess a number between 1–100. Closer guesses score more. 8 rounds to win.</p>
+          <input id="ngInput" type="number" min="1" max="100" style="width:120px; text-align:center; font-size:1.3rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);">
+          <br><button class="btn-claim" style="margin-top:14px;" id="ngSubmit">Guess</button>
+          <p id="ngResult" style="margin-top:10px; color:var(--text-dim);"></p>
+        </div>`;
+      el('ngSubmit').addEventListener('click', () => {
+        const guess = parseInt(el('ngInput').value, 10);
+        if (isNaN(guess)) return;
+        const diff = Math.abs(guess - secret);
+        const points = Math.max(0, 20 - diff);
+        addTourneyScore(points);
+        rounds++;
+        el('ngResult').textContent = `Secret was ${secret} · +${points} pts`;
+        if (rounds >= 8) { setTimeout(() => completeGame(tState.score, true), 700); return; }
+        setTimeout(newRound, 900);
+      });
+    }
+    newRound();
+  }
+
+
+  window.goToPremium = function () {
+    document.querySelector('.tab-btn[data-page="more"]').click();
+    setTimeout(() => document.getElementById('premiumSection').scrollIntoView({ behavior: 'smooth' }), 200);
+  };
+
+  // ---------- wallet + history ----------
+  // ---------- extra earning features ----------
+  const SPIN_SEGMENTS = [2, 5, 10, 5, 20, 10, 50, 15]; // must visually match backend SPIN_REWARDS set
+  const SPIN_COLORS = ['#0f6b5c', '#4c4fe0', '#a8751f', '#0f6b5c', '#4c4fe0', '#a8751f', '#0f6b5c', '#4c4fe0'];
+  let spinRotation = 0;
+
+  function drawSpinWheel() {
+    const canvas = el('spinCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const cx = canvas.width / 2, cy = canvas.height / 2, r = cx - 6;
+    const seg = (2 * Math.PI) / SPIN_SEGMENTS.length;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(cx, cy);
+    ctx.rotate(spinRotation);
+    SPIN_SEGMENTS.forEach((val, i) => {
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.arc(0, 0, r, i * seg, (i + 1) * seg);
+      ctx.closePath();
+      ctx.fillStyle = SPIN_COLORS[i % SPIN_COLORS.length];
+      ctx.fill();
+      ctx.save();
+      ctx.rotate(i * seg + seg / 2);
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 15px Inter, sans-serif';
+      ctx.fillText(val, r - 14, 5);
+      ctx.restore();
+    });
+    ctx.restore();
+    // pointer
+    ctx.beginPath();
+    ctx.moveTo(cx - 10, 4);
+    ctx.lineTo(cx + 10, 4);
+    ctx.lineTo(cx, 24);
+    ctx.closePath();
+    ctx.fillStyle = 'var(--text)'.startsWith('var') ? '#101828' : '#101828';
+    ctx.fill();
+  }
+
+  function drawScratchCanvas() {
+    const canvas = el('scratchCanvas');
+    const ctx = canvas.getContext('2d');
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.fillStyle = '#c7ccd6';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = '#8d93a8';
+    ctx.font = '13px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('Scratch here ✦', canvas.width / 2, canvas.height / 2 + 4);
+  }
+
+  function setupScratchInteraction(onRevealed) {
+    const canvas = el('scratchCanvas');
+    const ctx = canvas.getContext('2d');
+    let scratching = false, revealed = false;
+
+    function getPos(e) {
+      const rect = canvas.getBoundingClientRect();
+      const p = e.touches ? e.touches[0] : e;
+      return { x: (p.clientX - rect.left) * (canvas.width / rect.width), y: (p.clientY - rect.top) * (canvas.height / rect.height) };
+    }
+    function scratchAt(x, y) {
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.beginPath();
+      ctx.arc(x, y, 16, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    function checkRevealed() {
+      if (revealed) return;
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let cleared = 0;
+      for (let i = 3; i < data.length; i += 4 * 40) if (data[i] === 0) cleared++;
+      if (cleared / (data.length / (4 * 40)) > 0.45) { revealed = true; onRevealed(); }
+    }
+    const start = (e) => { scratching = true; const p = getPos(e); scratchAt(p.x, p.y); };
+    const move = (e) => { if (!scratching) return; e.preventDefault(); const p = getPos(e); scratchAt(p.x, p.y); checkRevealed(); };
+    const end = () => { scratching = false; };
+    canvas.onmousedown = start; canvas.onmousemove = move; canvas.onmouseup = end; canvas.onmouseleave = end;
+    canvas.ontouchstart = start; canvas.ontouchmove = move; canvas.ontouchend = end;
+  }
+
+  async function loadEarnStatus() {
+    try {
+      const s = await api('/earn/status');
+
+      // check-in row (7 days)
+      const row = el('checkinRow');
+      const rewards = [5, 8, 10, 12, 15, 20, 40];
+      row.innerHTML = rewards.map((r, i) => {
+        const dayNum = i + 1;
+        const done = dayNum <= s.checkinStreak;
+        const isToday = dayNum === s.checkinStreak + 1 && s.canCheckin;
+        const cls = done ? 'done' : isToday ? 'today' : 'locked';
+        return `<div class="checkin-day ${cls}">
+          <div class="cd-label">Day ${dayNum}</div>
+          <div class="cd-ic">${done ? '✅' : isToday ? '🎁' : '🔒'}</div>
+          <div class="cd-coin">+${r}</div>
+        </div>`;
+      }).join('');
+      el('checkinBtn').disabled = !s.canCheckin;
+      el('checkinBtn').textContent = s.canCheckin ? 'Check In' : 'Come back tomorrow';
+
+      el('spinBtn').disabled = !s.canSpin;
+      el('spinBtn').textContent = s.canSpin ? 'Spin' : 'Come back tomorrow';
+      drawSpinWheel();
+
+      el('scratchBtn').disabled = !s.canScratch;
+      el('scratchBtn').textContent = s.canScratch ? 'New Scratch Card' : 'Come back tomorrow';
+      if (s.canScratch) { drawScratchCanvas(); el('scratchPrize').textContent = ''; }
+      else { el('scratchPrize').textContent = 'Come back tomorrow'; el('scratchCanvas').getContext('2d').clearRect(0,0,220,120); }
+
+      const profileCard = el('profileCard');
+      if (s.profileBonusPaid) {
+        profileCard.querySelector('.earn-sub').textContent = 'Claimed ✓';
+        el('profileBtn').disabled = true;
+        el('profileBtn').textContent = 'Claimed';
+      }
+
+      const badgesList = el('badgesList');
+      badgesList.innerHTML = s.badges.map(b => `
+        <div class="badge-row ${b.unlocked ? '' : 'locked'}">
+          <div class="badge-ic">${b.claimed ? '✅' : b.unlocked ? '🏅' : '🔒'}</div>
+          <div class="badge-info">
+            <div class="bt">${b.key}</div>
+            <div class="bs">${b.threshold.toLocaleString('en-IN')} total coins needed · +${b.coins} reward</div>
+          </div>
+          ${b.claimed ? '' : b.unlocked ? `<button class="btn-claim" onclick="claimBadge('${b.key}')">Claim</button>` : ''}
+        </div>`).join('');
+    } catch (err) { /* silent — non-critical section */ }
+  }
+
+  el('checkinBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/checkin', { method: 'POST' });
+      showToast(`+${r.coinsAwarded} coins! Streak: ${r.streak} day${r.streak === 1 ? '' : 's'}`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
   });
+
+  let spinning = false;
+  el('spinBtn').addEventListener('click', async () => {
+    if (spinning) return;
+    spinning = true;
+    const originalLabel = el('spinBtn').textContent;
+    el('spinBtn').disabled = true;
+    try {
+      const r = await api('/earn/spin', { method: 'POST' });
+      // find a segment matching the (pre-premium-multiplier) reward — fall back to random if not found
+      const baseCoins = isPremium ? r.coinsAwarded / 2 : r.coinsAwarded;
+      let idx = SPIN_SEGMENTS.indexOf(baseCoins);
+      if (idx === -1) idx = Math.floor(Math.random() * SPIN_SEGMENTS.length);
+      const seg = (2 * Math.PI) / SPIN_SEGMENTS.length;
+      const targetAngle = (2 * Math.PI * 6) + (Math.PI * 1.5 - (idx * seg + seg / 2)); // 6 extra spins, land pointer (top) on segment idx
+      const startTime = performance.now();
+      const duration = 2600;
+      const startRotation = spinRotation;
+      function animateSpin(now) {
+        const t = Math.min(1, (now - startTime) / duration);
+        const eased = 1 - Math.pow(1 - t, 3);
+        spinRotation = startRotation + eased * targetAngle;
+        drawSpinWheel();
+        if (t < 1) requestAnimationFrame(animateSpin);
+        else {
+          showToast(`🎡 You won +${r.coinsAwarded} coins!`);
+          refreshWalletStats();
+          loadEarnStatus();
+          spinning = false;
+        }
+      }
+      requestAnimationFrame(animateSpin);
+    } catch (err) {
+      showToast(err.message);
+      el('spinBtn').disabled = false;
+      el('spinBtn').textContent = originalLabel;
+      spinning = false;
+    }
+  });
+
+  el('scratchBtn').addEventListener('click', async () => {
+    try {
+      const r = await api('/earn/scratch', { method: 'POST' });
+      drawScratchCanvas();
+      el('scratchPrize').textContent = `+${r.coinsAwarded} coins`;
+      el('scratchBtn').disabled = true;
+      setupScratchInteraction(() => {
+        showToast(`🎫 Revealed +${r.coinsAwarded} coins!`);
+        refreshWalletStats();
+        loadEarnStatus();
+      });
+    } catch (err) { showToast(err.message); }
+  });
+
+  el('profileBtn').addEventListener('click', () => { el('profileModalBg').style.display = 'flex'; });
+  el('profileCancelBtn').addEventListener('click', () => { el('profileModalBg').style.display = 'none'; });
+  el('profileSubmitBtn').addEventListener('click', async () => {
+    const dob = el('dobInput').value;
+    const gender = el('genderInput').value;
+    el('profileError').textContent = '';
+    if (!dob || !gender) { el('profileError').textContent = 'Please fill in both fields.'; return; }
+    try {
+      const r = await api('/earn/complete-profile', { method: 'POST', body: JSON.stringify({ dob, gender }) });
+      el('profileModalBg').style.display = 'none';
+      showToast(`+${r.coinsAwarded} coins — profile completed!`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { el('profileError').textContent = err.message; }
+  });
+
+  window.claimBadge = async function (key) {
+    try {
+      const r = await api('/earn/claim-badge', { method: 'POST', body: JSON.stringify({ key }) });
+      showToast(`🏅 Badge claimed! +${r.coinsAwarded} coins`);
+      await refreshWalletStats();
+      await loadEarnStatus();
+    } catch (err) { showToast(err.message); }
+  };
+
+  async function refreshWalletStats() {
+    const me = await api('/wallet/me');
+    el('walletBalance').textContent = me.wallet_coins;
+    el('statEarned').textContent = me.total_earned;
+    el('statINR').textContent = '₹' + me.walletInr.toFixed(2);
+    el('withdrawAvailable').textContent = '₹' + me.walletInr.toFixed(2);
+    el('withdrawBtn').disabled = me.walletInr < me.minWithdrawInr;
+    el('withdrawRateText').textContent = `Minimum withdrawal ₹${me.minWithdrawInr.toFixed(2)}`;
+    isPremium = !!me.is_premium;
+    renderPlanUI();
+    el('heroWalletInr').textContent = '₹' + me.walletInr.toFixed(2);
+    el('heroCoins').textContent = me.wallet_coins;
+    el('heroAdsWatched').textContent = me.total_earned;
+    el('settingsName').textContent = me.name;
+    el('settingsEmail').textContent = me.email;
+    el('settingsPlan').textContent = isPremium ? 'Premium' : 'Free';
+  }
+
+  async function loadReferralInfo() {
+    try {
+      const data = await api('/referral/me');
+      el('referralCodeText').textContent = data.referralCode || '—';
+      el('referralCountText').textContent = data.referredCount;
+      el('referralBonusText').textContent = data.bonusPerReferral;
+    } catch (err) { /* fails quietly — non-critical widget */ }
+  }
+  el('copyReferralBtn').addEventListener('click', async () => {
+    const code = el('referralCodeText').textContent;
+    if (code === '—') return;
+    const link = `${window.location.origin}/earny-day.html?ref=${code}`;
+    try {
+      await navigator.clipboard.writeText(link);
+      showToast('Referral link copied!');
+    } catch (err) {
+      showToast('Could not copy — long-press to copy manually: ' + link);
+    }
+  });
+
+  async function loadHistory() {
+    const rows = await api('/wallet/history');
+    const body = el('historyBody');
+    if (rows.length === 0) {
+      body.innerHTML = `<tr><td colspan="3" style="color:var(--text-dim);">No ads completed yet — head to the Ads tab to start.</td></tr>`;
+      return;
+    }
+    body.innerHTML = rows.map(r => {
+      const time = new Date(r.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+      return `<tr><td>${r.ad_name}</td><td>${time}</td><td class="pos">+${r.coins}</td></tr>`;
+    }).join('');
+  }
+
+  el('withdrawBtn').addEventListener('click', async () => {
+    try {
+      const result = await api('/withdraw/request', { method: 'POST', body: JSON.stringify({}) });
+      showToast(`Withdrawal request sent for ₹${result.amountInr.toFixed(2)} — pending admin approval.`);
+      await refreshWalletStats();
+      loadHistory();
+    } catch (err) {
+      showToast(err.message);
+    }
+  });
+
+  // ---------- leaderboard ----------
+  // ---------- tasks (CPA offerwall) ----------
+  let tasksLoaded = false;
+  async function loadTasksWall() {
+    if (tasksLoaded) return; // only need to load once per session
+    try {
+      const { url } = await api('/tasks/wall-url');
+      document.getElementById('tasksWallWrap').innerHTML =
+        `<iframe src="${url}" style="width:100%; min-height:70vh; border:1px solid var(--line); border-radius:12px; background:var(--surface);"></iframe>`;
+      tasksLoaded = true;
+    } catch (err) {
+      document.getElementById('tasksWallWrap').innerHTML = `
+        <div class="lock-card">
+          <div class="icon">🚧</div>
+          <h3>Tasks coming soon</h3>
+          <p>${err.message}</p>
+        </div>`;
+    }
+  }
+
+  async function loadLeaderboard() {
+    const data = await api('/leaderboard/top10');
+    const list = el('leaderboardList');
+    list.innerHTML = '';
+    data.top10.forEach((u, i) => {
+      const row = document.createElement('div');
+      row.className = 'lb-row' + (i === 0 ? ' top1' : i === 1 ? ' top2' : i === 2 ? ' top3' : '');
+      row.innerHTML = `
+        <div class="lb-rank">${i + 1}</div>
+        <div class="lb-avatar">${u.name[0]}</div>
+        <div class="lb-name">${u.name}</div>
+        <div class="lb-coins mono">${u.total_earned.toLocaleString('en-IN')}</div>`;
+      list.appendChild(row);
+    });
+    const footnote = el('leaderboardFootnote');
+    if (data.yourRank && data.yourRank > 10) {
+      footnote.style.display = 'block';
+      footnote.textContent = `You're currently #${data.yourRank} — watch more ads to break into today's top 10.`;
+    } else {
+      footnote.style.display = 'none';
+    }
+    el('statRank').textContent = data.yourRank ? (data.yourRank <= 10 ? '#' + data.yourRank + ' today' : 'Outside top 10') : 'Not ranked';
+    el('heroRank').textContent = data.yourRank ? '#' + data.yourRank : '—';
+  }
+
+  // ---------- premium (Razorpay) ----------
+  function renderPlanUI() {
+    el('upgradeBtn').textContent = isPremium ? 'You are Premium ✓' : 'Upgrade to Premium';
+    el('upgradeBtn').disabled = isPremium;
+    el('premiumCard').classList.toggle('highlight', !isPremium);
+  }
+
+  el('upgradeBtn').addEventListener('click', async () => {
+    if (isPremium) return;
+    try {
+      const { order, keyId } = await api('/payment/create-order', { method: 'POST' });
+      const rzp = new Razorpay({
+        key: keyId,
+         amount: order.amount,
+        currency: order.currency,
+        order_id: order.id,
+        name: 'Earny Day',
+        description: 'Premium subscription (2x rewards)',
+        handler: async function (response) {
+          try {
+            await api('/payment/verify', { method: 'POST', body: JSON.stringify(response) });
+            showToast('Premium unlocked — 2x rewards from now on!');
+            await refreshWalletStats();
+          } catch (err) {
+            showToast('Payment verification failed: ' + err.message);
+          }
+        },
+        theme: { color: '#0f6b5c' },
+      });
+      rzp.open();
+    } catch (err) {
+      showToast('Could not start payment: ' + err.message);
+    }
+  });
+
+  // ---------- toast ----------
+  function showToast(msg) {
+    const t = el('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2400);
+  }
+
+  // ---------- init after login ----------
+  async function refreshEverything() {
+    await refreshWalletStats();
+    await loadHistory();
+    await loadReferralInfo();
+    await loadEarnStatus();
+    await loadNotifications();
+  }
+
+  // ---------- notifications ----------
+  function timeAgo(iso) {
+    const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+  }
+  async function loadNotifications() {
+    try {
+      const rows = await api('/notifications');
+      el('notifDot').style.display = rows.length > 0 ? 'block' : 'none';
+      el('notifList').innerHTML = rows.length === 0
+        ? '<p style="color:var(--text-dim); font-size:0.85rem; text-align:center; margin-top:40px;">No notifications yet — start earning to see activity here.</p>'
+        : rows.map(r => `
+          <div class="notif-row">
+            <div class="ni">${r.icon}</div>
+            <div style="flex:1;">
+              <div class="nt">${r.title}</div>
+              <div class="ns">${r.subtitle || ''}</div>
+              <div class="nd">${timeAgo(r.created_at)}</div>
+            </div>
+          </div>`).join('');
+    } catch (err) { /* silent */ }
+  }
+  el('notifBtn').addEventListener('click', () => { el('notifPanelBg').style.display = 'flex'; });
+
+  // ---------- auto-login on page load if a saved session exists ----------
+  (async function initSession() {
+    if (!authToken) return; // no saved token — show login screen as normal
+    try {
+      const me = await api('/wallet/me'); // validates the token against the backend
+      el('welcomeName').textContent = 'Welcome, ' + me.name;
+      el('authScreen').style.display = 'none';
+      el('app').style.display = 'block';
+      await refreshEverything();
+    } catch (err) {
+      // token expired or invalid — clear it and fall back to the login screen
+      authToken = null;
+      localStorage.removeItem('earnyday_token');
+    }
+  })();
+</script>
+
+</body>
+</html>

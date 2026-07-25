@@ -1,4 +1,4 @@
-// ============================================================
+/ ============================================================
 // EARNY DAY — combined single-file backend (Postgres / Supabase version)
 // Everything (database, auth, ads, wallet, leaderboard, withdraw,
 // payment, admin) lives in this one file so it's easy to copy-paste.
@@ -197,7 +197,7 @@ async function sendOtpEmail(toEmail, otp) {
   </table>
 </body>
 </html>`,
-    }),
+}),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -369,7 +369,6 @@ app.get('/api/referral/me', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Could not load referral info.' });
   }
 });
-
 // ---------- WALLET ROUTES ----------
 app.get('/api/wallet/me', requireAuth, async (req, res) => {
   try {
@@ -520,8 +519,8 @@ app.get('/api/tasks/postback', async (req, res) => {
   } catch (err) {
     console.error('Postback error:', err);
     res.status(500).send('Error');
-  }
-});
+      }
+  });
 
 app.get('/api/tasks/history', requireAuth, async (req, res) => {
   try {
@@ -772,8 +771,7 @@ app.get('/api/admin/stats', requireAdmin, async (req, res) => {
     const userShare = cfg.user_share_percent / 100;
     const platformShare = (1 - userShare) / userShare;
     const userPayoutInr = totals.totalcoins * cfg.coin_to_inr;
-    res.json({
-      totalUsers: parseInt(totals.totalusers, 10), adsServed,
+    res.json({totalUsers: parseInt(totals.totalusers, 10), adsServed,
       userPayoutInr: +userPayoutInr.toFixed(2),
       platformRevenueInr: +(userPayoutInr * platformShare).toFixed(2),
       paidOutInr: +paidOutRes.rows[0].s, pendingWithdrawalsInr: +pendingOutRes.rows[0].s, config: cfg,
@@ -838,23 +836,33 @@ app.post('/api/admin/config', requireAdmin, async (req, res) => {
 });
 
 // ============================================================
-// TOURNAMENTS — 8 parallel skill-based games, 20 players/room
+// TOURNAMENTS — mixed speed-race / timed games, 20 players/room
 // ============================================================
 
+// mode: 'speed' = whoever finishes first wins, no fixed clock (finalizes the instant
+//                 someone submits completed:true — race-safe via a conditional UPDATE)
+// mode: 'timed' = fixed duration, highest score when the clock hits zero wins
 const TOURNAMENT_GAMES = [
-  { key: 'math_sprint',     name: 'Math Sprint',     icon: '➕' },
-  { key: 'word_scramble',   name: 'Word Scramble',   icon: '🔤' },
-  { key: 'memory_sequence', name: 'Memory Sequence', icon: '🧠' },
-  { key: 'reaction_time',   name: 'Reaction Test',   icon: '⚡' },
-  { key: 'quiz_marathon',   name: 'Quiz Marathon',   icon: '❓' },
-  { key: 'pattern_match',   name: 'Pattern Match',   icon: '🔷' },
-  { key: 'number_guess',    name: 'Number Guess',    icon: '🔢' },
-  { key: 'aim_tap',         name: 'Aim & Tap',       icon: '🎯' },
+  { key: 'test_tube',       name: 'Test Tube Color Fill', icon: '🧪', mode: 'speed', levels: 5, maxDurationSeconds: 300 },
+  { key: 'tap_race',        name: 'Tap Race',             icon: '👆', mode: 'timed', duration_seconds: 30 },
+  { key: 'number_puzzle',   name: 'Number Puzzle',        icon: '🔢', mode: 'speed', maxDurationSeconds: 300 },
+  { key: 'sudoku',          name: 'Sudoku',                icon: '🧩', mode: 'speed', maxDurationSeconds: 300 },
+  { key: 'math_sprint',     name: 'Math Sprint',          icon: '➕', mode: 'speed', maxDurationSeconds: 240 },
+  { key: 'word_scramble',   name: 'Word Scramble',        icon: '🔤', mode: 'speed', maxDurationSeconds: 240 },
+  { key: 'memory_sequence', name: 'Memory Sequence',      icon: '🧠', mode: 'speed', maxDurationSeconds: 240 },
+  { key: 'reaction_time',   name: 'Reaction Test',        icon: '⚡', mode: 'speed', maxDurationSeconds: 240 },
+  { key: 'quiz_marathon',   name: 'Quiz Marathon',        icon: '❓', mode: 'speed', maxDurationSeconds: 240 },
+  { key: 'pattern_match',   name: 'Pattern Match',        icon: '🔷', mode: 'speed', maxDurationSeconds: 240 },
+  { key: 'number_guess',    name: 'Number Guess',         icon: '🔢', mode: 'speed', maxDurationSeconds: 240 },
 ];
+const TOURNAMENT_GAME_MAP = Object.fromEntries(TOURNAMENT_GAMES.map(g => [g.key, g]));
 const TOURNAMENT_GAME_KEYS = TOURNAMENT_GAMES.map(g => g.key);
 const TOURNAMENT_MAX_PLAYERS = 20;
-const TOURNAMENT_DURATION_SECONDS = 240; // 4 minutes
 const TOURNAMENT_PRIZE_COINS = 300;
+
+function durationForGame(game) {
+  return game.mode === 'timed' ? game.duration_seconds : game.maxDurationSeconds;
+}
 
 async function initTournamentTables() {
   await pool.query(`
@@ -864,7 +872,7 @@ async function initTournamentTables() {
       status TEXT NOT NULL DEFAULT 'waiting',
       max_players INTEGER NOT NULL DEFAULT ${TOURNAMENT_MAX_PLAYERS},
       prize_coins INTEGER NOT NULL DEFAULT ${TOURNAMENT_PRIZE_COINS},
-      duration_seconds INTEGER NOT NULL DEFAULT ${TOURNAMENT_DURATION_SECONDS},
+      duration_seconds INTEGER NOT NULL DEFAULT 240,
       started_at TIMESTAMPTZ,
       ends_at TIMESTAMPTZ,
       winner_user_id INTEGER,
@@ -875,43 +883,64 @@ async function initTournamentTables() {
       tournament_id INTEGER NOT NULL REFERENCES tournaments(id),
       user_id INTEGER NOT NULL,
       score INTEGER NOT NULL DEFAULT 0,
+      completed BOOLEAN NOT NULL DEFAULT FALSE,
       submitted BOOLEAN NOT NULL DEFAULT FALSE,
       joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       submitted_at TIMESTAMPTZ,
       UNIQUE(tournament_id, user_id)
     );
   `);
+  await pool.query(`ALTER TABLE tournament_players ADD COLUMN IF NOT EXISTS completed BOOLEAN NOT NULL DEFAULT FALSE;`);
 }
 
-// Closes out a tournament: picks the highest score as winner, pays the prize, marks it finished.
-// Safe to call more than once — only acts on rooms that are still 'active'.
+// Ranking order depends on the game's mode:
+//   speed -> whoever finished (completed) earliest wins; unfinished players rank after by score
+//   timed -> highest score wins regardless of completion
+function leaderboardOrderClause(mode) {
+  return mode === 'speed'
+    ? 'ORDER BY p.completed DESC, p.submitted_at ASC NULLS LAST, p.score DESC'
+    : 'ORDER BY p.score DESC, p.submitted_at ASC NULLS LAST';
+}
+
+// Pays out the prize and marks a tournament finished. Race-safe: only the caller whose
+// conditional UPDATE actually flips status 'active' -> 'finished' gets to pay the winner.
+async function claimTournamentWin(tournamentId, winnerUserId) {
+  const claim = await pool.query(
+    `UPDATE tournaments SET status = 'finished', winner_user_id = $1 WHERE id = $2 AND status = 'active' RETURNING *`,
+    [winnerUserId, tournamentId]
+  );
+  if (claim.rowCount > 0) {
+    const finalCoins = await awardCoins(winnerUserId, claim.rows[0].prize_coins);
+    await logActivity(winnerUserId, '🏆', 'Tournament won!', `+${finalCoins} coins`);
+  }
+  return claim.rows[0] || null;
+}
+
+// Closes out a tournament whose clock has run out (timed games, or the speed-game safety cap
+// if nobody finished in time). Safe to call more than once — only acts on 'active' rooms.
 async function finalizeTournamentIfDue(tournament) {
   if (tournament.status !== 'active') return tournament;
   const isTimeUp = tournament.ends_at && new Date(tournament.ends_at) <= new Date();
-  const allSubmittedRes = await pool.query(
-    'SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE submitted) AS done FROM tournament_players WHERE tournament_id = $1',
-    [tournament.id]
-  );
-  const { total, done } = allSubmittedRes.rows[0];
-  const allSubmitted = parseInt(total, 10) > 0 && parseInt(total, 10) === parseInt(done, 10);
-  if (!isTimeUp && !allSubmitted) return tournament;
+  if (!isTimeUp) return tournament;
 
+  const game = TOURNAMENT_GAME_MAP[tournament.game_key] || { mode: 'timed' };
+  const order = leaderboardOrderClause(game.mode);
   const winnerRes = await pool.query(
-    'SELECT user_id, score FROM tournament_players WHERE tournament_id = $1 ORDER BY score DESC, submitted_at ASC LIMIT 1',
+    `SELECT p.user_id FROM tournament_players p WHERE p.tournament_id = $1 ${order} LIMIT 1`,
     [tournament.id]
   );
   const winner = winnerRes.rows[0];
-  await pool.query(`UPDATE tournaments SET status = 'finished', winner_user_id = $1 WHERE id = $2`, [winner ? winner.user_id : null, tournament.id]);
-  if (winner) {
-    const finalCoins = await awardCoins(winner.user_id, tournament.prize_coins);
-    await logActivity(winner.user_id, '🏆', 'Tournament won!', `+${finalCoins} coins`);
-  }
+  const claimed = winner ? await claimTournamentWin(tournament.id, winner.user_id) : null;
+  if (claimed) return claimed;
+
+  // nobody to award, or already finalized by a concurrent request — just fetch current state
   const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [tournament.id]);
   return rows[0];
 }
 
 // Finds an open ("waiting") room for a game with a free slot, or creates a fresh one.
 async function getOrCreateWaitingRoom(gameKey) {
+  const game = TOURNAMENT_GAME_MAP[gameKey];
   const openRes = await pool.query(
     `SELECT t.* FROM tournaments t
      WHERE t.game_key = $1 AND t.status = 'waiting'
@@ -923,7 +952,7 @@ async function getOrCreateWaitingRoom(gameKey) {
   const insertRes = await pool.query(
     `INSERT INTO tournaments (game_key, max_players, prize_coins, duration_seconds)
      VALUES ($1, $2, $3, $4) RETURNING *`,
-    [gameKey, TOURNAMENT_MAX_PLAYERS, TOURNAMENT_PRIZE_COINS, TOURNAMENT_DURATION_SECONDS]
+    [gameKey, TOURNAMENT_MAX_PLAYERS, TOURNAMENT_PRIZE_COINS, durationForGame(game)]
   );
   return insertRes.rows[0];
 }
@@ -949,7 +978,7 @@ app.get('/api/tournament/games', optionalAuth, async (req, res) => {
         maxPlayers: TOURNAMENT_MAX_PLAYERS,
       });
     }
-    res.json({ games: summaries, prizeCoins: TOURNAMENT_PRIZE_COINS, durationSeconds: TOURNAMENT_DURATION_SECONDS });
+    res.json({ games: summaries, prizeCoins: TOURNAMENT_PRIZE_COINS });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not load tournaments.' });
@@ -960,6 +989,7 @@ app.post('/api/tournament/join', requireAuth, async (req, res) => {
   try {
     const { gameKey } = req.body;
     if (!TOURNAMENT_GAME_KEYS.includes(gameKey)) return res.status(400).json({ error: 'Unknown game.' });
+    const game = TOURNAMENT_GAME_MAP[gameKey];
 
     // already in an open room for this game? just return it instead of double-joining
     const existingRes = await pool.query(
@@ -987,7 +1017,7 @@ app.post('/api/tournament/join', requireAuth, async (req, res) => {
       tournament = rows[0];
     }
 
-    res.json({ tournament, playerCount });
+    res.json({ tournament, playerCount, mode: game.mode });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not join tournament.' });
@@ -1008,6 +1038,7 @@ app.get('/api/tournament/:id/status', requireAuth, async (req, res) => {
       playerCount: parseInt(countRes.rows[0].c, 10),
       secondsLeft: tournament.ends_at ? Math.max(0, Math.round((new Date(tournament.ends_at) - Date.now()) / 1000)) : null,
       me: mineRes.rows[0] || null,
+      mode: (TOURNAMENT_GAME_MAP[tournament.game_key] || {}).mode,
     });
   } catch (err) {
     console.error(err);
@@ -1015,9 +1046,11 @@ app.get('/api/tournament/:id/status', requireAuth, async (req, res) => {
   }
 });
 
+// Body: { score, completed }. `completed` only matters for speed-mode games — the first
+// player to submit completed:true wins the room immediately.
 app.post('/api/tournament/:id/submit-score', requireAuth, async (req, res) => {
   try {
-    const { score } = req.body;
+    const { score, completed } = req.body;
     if (typeof score !== 'number' || score < 0) return res.status(400).json({ error: 'Invalid score.' });
 
     const { rows } = await pool.query('SELECT * FROM tournaments WHERE id = $1', [req.params.id]);
@@ -1025,15 +1058,33 @@ app.post('/api/tournament/:id/submit-score', requireAuth, async (req, res) => {
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
     if (tournament.status !== 'active') return res.status(400).json({ error: 'Tournament is not active.' });
 
+    const game = TOURNAMENT_GAME_MAP[tournament.game_key] || { mode: 'timed' };
     const updateRes = await pool.query(
-      `UPDATE tournament_players SET score = $1, submitted = TRUE, submitted_at = NOW()
-       WHERE tournament_id = $2 AND user_id = $3 AND submitted = FALSE RETURNING *`,
-      [Math.round(score), tournament.id, req.userId]
+      `UPDATE tournament_players SET score = $1, completed = $2, submitted = TRUE, submitted_at = NOW()
+       WHERE tournament_id = $3 AND user_id = $4 AND submitted = FALSE RETURNING *`,
+      [Math.round(score), !!completed, tournament.id, req.userId]
     );
     if (updateRes.rowCount === 0) return res.status(400).json({ error: 'Score already submitted or you are not in this tournament.' });
 
-    tournament = await finalizeTournamentIfDue(tournament);
-    res.json({ success: true, tournament });
+    // speed mode: finishing first wins the room right now (race-safe conditional update)
+    if (game.mode === 'speed' && completed) {
+      const claimed = await claimTournamentWin(tournament.id, req.userId);
+      if (claimed) tournament = claimed;
+    } else {
+      tournament = await finalizeTournamentIfDue(tournament);
+    }
+
+    // tell the player their rank among everyone who has submitted so far (for the quick post-game screen)
+    const rankRes = await pool.query(
+      `SELECT COUNT(*) + 1 AS rank FROM tournament_players
+       WHERE tournament_id = $1 AND submitted = TRUE AND user_id != $2
+         AND (completed > (SELECT completed FROM tournament_players WHERE tournament_id = $1 AND user_id = $2)
+              OR (completed = (SELECT completed FROM tournament_players WHERE tournament_id = $1 AND user_id = $2)
+                  AND score > $3))`,
+      [tournament.id, req.userId, Math.round(score)]
+    );
+
+    res.json({ success: true, tournament, myRank: parseInt(rankRes.rows[0].rank, 10) });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not submit score.' });
@@ -1047,13 +1098,14 @@ app.get('/api/tournament/:id/leaderboard', requireAuth, async (req, res) => {
     if (!tournament) return res.status(404).json({ error: 'Tournament not found.' });
     tournament = await finalizeTournamentIfDue(tournament);
 
+    const game = TOURNAMENT_GAME_MAP[tournament.game_key] || { mode: 'timed' };
     const boardRes = await pool.query(
-      `SELECT p.user_id, u.name, p.score, p.submitted
+      `SELECT p.user_id, u.name, p.score, p.submitted, p.completed
        FROM tournament_players p JOIN users u ON u.id = p.user_id
-       WHERE p.tournament_id = $1 ORDER BY p.score DESC, p.submitted_at ASC`,
+       WHERE p.tournament_id = $1 ${leaderboardOrderClause(game.mode)}`,
       [tournament.id]
     );
-    res.json({ tournament, board: boardRes.rows });
+    res.json({ tournament, board: boardRes.rows, mode: game.mode });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Could not load leaderboard.' });

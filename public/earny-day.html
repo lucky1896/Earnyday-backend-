@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Earny Day — Watch. Earn. Daily.</title>
-  <meta name="mylead-verification" content="0fc255d97a40eed0b53b21d3a269832d">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
@@ -109,6 +108,20 @@
   .ad-info .name{ font-weight:600; font-size:0.95rem; }
   .ad-info .meta{ color:var(--text-dim); font-size:0.8rem; margin-top:2px; }
   .ad-action{ flex-shrink:0; min-width:96px; text-align:right; }
+  .tcard{ background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:14px; display:flex; gap:12px; box-shadow:var(--shadow); }
+  .tcard .thumb{ width:60px; height:60px; border-radius:12px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:1.7rem; background:var(--surface-alt); }
+  .tcard .body{ flex:1; min-width:0; }
+  .tcard .title-row{ display:flex; align-items:center; gap:8px; margin-bottom:4px; flex-wrap:wrap; }
+  .tcard .title-row strong{ font-size:0.98rem; }
+  .tcard .badge{ font-size:0.62rem; font-weight:700; padding:2px 8px; border-radius:8px; letter-spacing:0.3px; }
+  .tcard .badge.live{ background:#8b5cf6; color:#fff; }
+  .tcard .badge.hot{ background:#ef4444; color:#fff; }
+  .tcard .players{ color:#a78bfa; font-size:0.78rem; margin-bottom:8px; }
+  .tcard .stats-row{ display:flex; gap:14px; font-size:0.68rem; color:var(--text-dim); margin-bottom:10px; }
+  .tcard .stats-row b{ color:var(--text); display:block; font-size:0.82rem; }
+  .tcard .play-btn{ background:linear-gradient(135deg,#8b5cf6,#6d28d9); color:#fff; border:none; border-radius:10px; padding:8px 18px; font-weight:700; font-size:0.8rem; float:right; }
+  .tcard .play-btn.hot{ background:linear-gradient(135deg,#ef4444,#b91c1c); }
+  .tcard .play-btn:disabled{ opacity:0.5; }
 
   .ring{ width:44px; height:44px; border-radius:50%; background:conic-gradient(var(--primary) calc(var(--p,0) * 1%), var(--line) 0); display:flex; align-items:center; justify-content:center; font-size:0.72rem; font-weight:700; margin-left:auto; }
   .ring::after{ content:attr(data-t); width:34px; height:34px; border-radius:50%; background:var(--surface); display:flex; align-items:center; justify-content:center; }
@@ -264,7 +277,6 @@
 <div id="otpScreen" style="display:none;">
   <div class="auth-card">
     <div class="logo" style="margin-bottom:18px;"><span class="logo-mark"></span> Earny Day</div>
-    <h1>Verify your email</h1>
     <p class="sub">We sent a 6-digit code to <strong id="otpEmailDisplay"></strong>. Enter it below to activate your account.</p>
 
     <div class="auth-error" id="otpError"></div>
@@ -295,6 +307,7 @@
       </div>
     </div>
   </header>
+
   <!-- notifications panel -->
   
 <div id="notifPanelBg" style="display:none; position:fixed; inset:0; background:rgba(16,24,40,0.5); z-index:70; justify-content:flex-end;" onclick="if(event.target===this) this.style.display='none';">
@@ -462,7 +475,10 @@
       <div class="page-head"><h1>🏆 Tournaments</h1><p id="tourneyPrizeNote">Compete live · winner takes the coins.</p></div>
 
       <div id="tourney-list">
-        <div id="tourneyGamesGrid" class="queue"></div>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h3 style="margin:0; font-size:1.05rem;">Live Tournaments</h3>
+        </div>
+        <div id="tourneyGamesGrid" style="display:flex; flex-direction:column; gap:12px;"></div>
       </div>
 
       <div id="tourney-wait" style="display:none; text-align:center; padding:48px 20px;">
@@ -475,9 +491,21 @@
       <div id="tourney-play" style="display:none;">
         <div class="status-card" style="display:flex; justify-content:space-between; align-items:center;">
           <div>Score: <span id="tourneyScore" class="mono" style="font-weight:700;">0</span></div>
-          <div>⏱ <span id="tourneyTimer" class="mono" style="font-weight:700;">240</span>s</div>
+          <div id="tourneyTimerWrap">⏱ <span id="tourneyTimer" class="mono" style="font-weight:700;">0</span>s</div>
         </div>
         <div id="tourneyGameArea"></div>
+      </div>
+
+      <!-- quick 3-5s post-game screen: your score + your live rank -->
+      <div id="tourney-quick" style="display:none; text-align:center; padding:50px 20px;">
+        <div style="font-size:2.2rem; margin-bottom:6px;">🏁</div>
+        <h2 style="margin:0 0 6px;">Nice run!</h2>
+        <p style="color:var(--text-dim); margin:0 0 20px;">Here's how you did</p>
+        <div class="status-card" style="display:flex; justify-content:space-around; text-align:center;">
+          <div><div style="color:var(--text-dim); font-size:0.75rem;">SCORE</div><div id="quickScore" class="mono" style="font-size:1.4rem; font-weight:800;">0</div></div>
+          <div><div style="color:var(--text-dim); font-size:0.75rem;">YOUR RANK</div><div id="quickRank" class="mono" style="font-size:1.4rem; font-weight:800;">—</div></div>
+        </div>
+        <p style="color:var(--text-dim); font-size:0.8rem; margin-top:16px;">Waiting for the full result…</p>
       </div>
 
       <div id="tourney-result" style="display:none;">
@@ -495,7 +523,7 @@
       <div class="premium-banner" onclick="document.getElementById('premiumSection').scrollIntoView({behavior:'smooth'})">
         <div class="pb-ic">👑</div>
         <div style="flex:1;">
-          <div class="pb-title">Go Premium</div>
+          div class="pb-title">Go Premium</div>
           <div class="pb-sub">2x rewards · Priority payouts</div>
         </div>
         <div style="color:#fff; font-size:1.2rem;">›</div>
@@ -752,10 +780,16 @@
   // ============================================================
   // TOURNAMENTS
   // ============================================================
-  let tState = { tournamentId: null, gameKey: null, pollTimer: null, gameTimer: null, score: 0, timeLeft: 0 };
+  const GAME_ICONS = {
+    test_tube: '🧪', tap_race: '👆', number_puzzle: '🔢', sudoku: '🧩',
+    math_sprint: '➕', word_scramble: '🔤', memory_sequence: '🧠',
+    reaction_time: '⚡', quiz_marathon: '❓', pattern_match: '🔷', number_guess: '🔢',
+  };
+
+  let tState = { tournamentId: null, gameKey: null, mode: null, pollTimer: null, gameTimer: null, score: 0, timeLeft: 0, onTimeUp: null };
 
   function showTourneyView(view) {
-    ['list', 'wait', 'play', 'result'].forEach(v => {
+    ['list', 'wait', 'play', 'quick', 'result'].forEach(v => {
       el('tourney-' + v).style.display = (v === view) ? 'block' : 'none';
     });
   }
@@ -763,18 +797,28 @@
   async function loadTourneyGames() {
     try {
       const data = await api('/tournament/games');
-      el('tourneyPrizeNote').textContent = `Winner gets ${data.prizeCoins} coins · ${Math.round(data.durationSeconds / 60)} min matches`;
-      el('tourneyGamesGrid').innerHTML = data.games.map(g => `
-        <div class="ad-card">
-          <div class="ad-thumb">${g.icon}</div>
-          <div class="ad-info">
-            <div class="name">${g.name}</div>
-            <div class="meta">${g.playerCount}/${g.maxPlayers} joined${g.status === 'active' ? ' · match in progress' : ''}</div>
+      el('tourneyPrizeNote').textContent = `Winner gets ${data.prizeCoins} coins · finish first to win`;
+      el('tourneyGamesGrid').innerHTML = data.games.map(g => {
+        const isHot = g.status === 'waiting' && g.playerCount >= g.maxPlayers * 0.6;
+        const isFull = g.status === 'active';
+        const badgeClass = isHot ? 'hot' : 'live';
+        const badgeText = isFull ? 'IN PROGRESS' : 'LIVE';
+        const modeLabel = g.mode === 'timed' ? `${g.duration_seconds}s` : 'Speed';
+        return `
+        <div class="tcard">
+          <div class="thumb">${GAME_ICONS[g.key] || '🎮'}</div>
+          <div class="body">
+            <div class="title-row"><strong>${g.name}</strong><span class="badge ${badgeClass}">${badgeText}</span></div>
+            <div class="players">👥 ${g.playerCount}/${g.maxPlayers} Players</div>
+            <div class="stats-row">
+              <div>Entry Fee<b>💰 0</b></div>
+              <div>Prize<b>💰 ${data.prizeCoins}</b></div>
+              <div>Mode<b>${modeLabel}</b></div>
+            </div>
+            <button class="play-btn ${isHot ? 'hot' : ''}" onclick="joinTournament('${g.key}')" ${isFull ? 'disabled' : ''}>${isFull ? 'Full' : 'Play Now'} ›</button>
           </div>
-          <div class="ad-action">
-            <button class="btn-claim" onclick="joinTournament('${g.key}')" ${g.status === 'active' ? 'disabled' : ''}>${g.status === 'active' ? 'Full' : 'Join'}</button>
-          </div>
-        </div>`).join('');
+        </div>`;
+      }).join('');
       showTourneyView('list');
     } catch (err) { showToast(err.message); }
   }
@@ -784,6 +828,7 @@
       const data = await api('/tournament/join', { method: 'POST', body: JSON.stringify({ gameKey }) });
       tState.tournamentId = data.tournament.id;
       tState.gameKey = gameKey;
+      tState.mode = data.mode;
       el('tourneyWaitCount').textContent = `${data.playerCount}/${data.tournament.max_players} joined`;
       if (data.tournament.status === 'active') {
         startTourneyGame(Math.round((new Date(data.tournament.ends_at) - Date.now()) / 1000));
@@ -800,6 +845,7 @@
       try {
         const data = await api(`/tournament/${tState.tournamentId}/status`);
         el('tourneyWaitCount').textContent = `${data.playerCount}/${data.tournament.max_players} joined`;
+        tState.mode = data.mode;
         if (data.tournament.status === 'active') {
           clearInterval(tState.pollTimer);
           startTourneyGame(data.secondsLeft);
@@ -820,6 +866,7 @@
   function startTourneyGame(secondsLeft) {
     showTourneyView('play');
     tState.score = 0;
+    tState.onTimeUp = null;
     tState.timeLeft = secondsLeft && secondsLeft > 0 ? secondsLeft : 240;
     el('tourneyScore').textContent = '0';
     el('tourneyTimer').textContent = tState.timeLeft;
@@ -830,7 +877,8 @@
       el('tourneyTimer').textContent = tState.timeLeft;
       if (tState.timeLeft <= 0) {
         clearInterval(tState.gameTimer);
-        finishTourneyGame();
+        if (tState.onTimeUp) tState.onTimeUp();
+        else completeGame(tState.score, false);
       }
     }, 1000);
   }
@@ -840,14 +888,27 @@
     el('tourneyScore').textContent = tState.score;
   }
 
-  async function finishTourneyGame() {
+  // Every mini-game calls this when it's done (or when time runs out).
+  // completed=true means "I finished the whole task" — that's what wins speed-mode rooms.
+  async function completeGame(score, completed) {
     clearInterval(tState.gameTimer);
-    el('tourneyGameArea').innerHTML = '<p style="text-align:center; color:var(--text-dim); padding:30px 0;">Time up! Submitting your score…</p>';
+    el('tourneyGameArea').innerHTML = '';
     try {
-      await api(`/tournament/${tState.tournamentId}/submit-score`, { method: 'POST', body: JSON.stringify({ score: tState.score }) });
-    } catch (err) { /* may already be submitted */ }
-    showTourneyView('result');
-    pollTourneyResult();
+      const data = await api(`/tournament/${tState.tournamentId}/submit-score`, { method: 'POST', body: JSON.stringify({ score, completed: !!completed }) });
+      showQuickResult(score, data.myRank);
+    } catch (err) {
+      showQuickResult(score, null);
+    }
+  }
+
+  function showQuickResult(score, rank) {
+    showTourneyView('quick');
+    el('quickScore').textContent = score;
+    el('quickRank').textContent = rank ? '#' + rank : '—';
+    setTimeout(() => {
+      showTourneyView('result');
+      pollTourneyResult();
+    }, 4000);
   }
 
   async function pollTourneyResult() {
@@ -877,6 +938,10 @@
   // ---------- mini-game engines ----------
   function initMiniGame(key) {
     const area = el('tourneyGameArea');
+    if (key === 'test_tube') return initTestTube(area);
+    if (key === 'tap_race') return initTapRace(area);
+    if (key === 'number_puzzle') return initNumberPuzzle(area);
+    if (key === 'sudoku') return initSudoku(area);
     if (key === 'math_sprint') return initMathSprint(area);
     if (key === 'word_scramble') return initWordScramble(area);
     if (key === 'memory_sequence') return initMemorySequence(area);
@@ -884,7 +949,144 @@
     if (key === 'quiz_marathon') return initQuizMarathon(area);
     if (key === 'pattern_match') return initPatternMatch(area);
     if (key === 'number_guess') return initNumberGuess(area);
-    if (key === 'aim_tap') return initAimTap(area);
+  }
+
+  // 🧪 Test Tube Color Fill — 5 levels. Each level flashes a color sequence, then you
+  // tap the colors back in the same order. Clear all 5 levels first to win the room.
+  function initTestTube(area) {
+    const palette = ['#ef4444', '#22c55e', '#3b82f6', '#f5a623', '#a855f7'];
+    let level = 1;
+    function renderLevel() {
+      const len = level + 2; // level 1 = 3 colors, level 5 = 7 colors
+      const seq = Array.from({ length: len }, () => palette[Math.floor(Math.random() * palette.length)]);
+      area.dataset.seq = JSON.stringify(seq);
+      area.dataset.step = '0';
+      area.innerHTML = `
+        <div style="text-align:center; padding:10px 0;">
+          <div style="color:var(--text-dim); font-size:0.8rem; margin-bottom:6px;">Level ${level} of 5</div>
+          <div id="ttPreview" style="display:flex; gap:8px; justify-content:center; margin-bottom:18px;">
+            ${seq.map(c => `<div style="width:34px;height:34px;border-radius:8px;background:${c};"></div>`).join('')}
+          </div>
+          <div id="ttStatus" style="color:var(--text-dim); font-size:0.85rem; margin-bottom:14px;">Memorize the order…</div>
+          <div id="ttButtons" style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; visibility:hidden;">
+            ${palette.map(c => `<button class="tt-opt" data-c="${c}" style="width:50px;height:50px;border-radius:50%;background:${c};border:3px solid transparent;"></button>`).join('')}
+          </div>
+        </div>`;
+      setTimeout(() => {
+        el('ttPreview').style.visibility = 'hidden';
+        el('ttStatus').textContent = 'Now tap them back in order!';
+        el('ttButtons').style.visibility = 'visible';
+      }, 1200 + len * 300);
+      area.querySelectorAll('.tt-opt').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const step = parseInt(area.dataset.step, 10);
+          const seqArr = JSON.parse(area.dataset.seq);
+          if (btn.dataset.c === seqArr[step]) {
+            btn.style.borderColor = '#fff';
+            setTimeout(() => btn.style.borderColor = 'transparent', 200);
+            const next = step + 1;
+            area.dataset.step = String(next);
+            if (next === seqArr.length) {
+              if (level >= 5) { addTourneyScore(5); completeGame(tState.score, true); }
+              else { level++; addTourneyScore(1); setTimeout(renderLevel, 400); }
+            }
+          } else {
+            el('ttStatus').textContent = 'Oops, wrong order — level restarted!';
+            setTimeout(renderLevel, 900);
+          }
+        });
+      });
+    }
+    renderLevel();
+  }
+
+  // 👆 Tap Race — fixed 30s, most taps wins (timed mode; time-up is handled by the shared timer).
+  function initTapRace(area) {
+    let taps = 0;
+    area.innerHTML = `
+      <div style="text-align:center; padding:20px 0;">
+        <p style="color:var(--text-dim); margin-bottom:16px;">Tap as fast as you can before time runs out!</p>
+        <button id="trBtn" style="width:180px; height:180px; border-radius:50%; background:linear-gradient(135deg,#ef4444,#b91c1c); border:none; color:#fff; font-size:1.4rem; font-weight:800;">TAP!</button>
+        <div style="margin-top:16px; font-size:1.1rem;">Taps: <span id="trCount" class="mono" style="font-weight:800;">0</span></div>
+      </div>`;
+    el('trBtn').addEventListener('click', () => {
+      taps++;
+      el('trCount').textContent = taps;
+      tState.score = taps;
+      el('tourneyScore').textContent = taps;
+    });
+    tState.onTimeUp = () => completeGame(taps, false);
+  }
+
+  // 🔢 Number Puzzle —tap 1 through 9 in ascending order, as fast as possible.
+  function initNumberPuzzle(area) {
+    let next = 1;
+    const nums = Array.from({ length: 9 }, (_, i) => i + 1).sort(() => Math.random() - 0.5);
+    area.innerHTML = `
+      <div style="text-align:center; padding:16px 0;">
+        <p style="color:var(--text-dim); margin-bottom:14px;">Tap 1 → 9 in order, as fast as you can!</p>
+        <div style="display:grid; grid-template-columns:repeat(3,64px); gap:10px; justify-content:center;">
+          ${nums.map(n => `<button class="np-opt" data-n="${n}" style="width:64px;height:64px;border-radius:12px;background:var(--surface-alt); border:1px solid var(--line); color:var(--text); font-size:1.3rem; font-weight:700;">${n}</button>`).join('')}
+        </div>
+      </div>`;
+    area.querySelectorAll('.np-opt').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const n = parseInt(btn.dataset.n, 10);
+        if (n === next) {
+          btn.style.background = 'var(--primary)';
+          btn.style.color = '#1a1200';
+          btn.disabled = true;
+          next++;
+          addTourneyScore(1);
+          if (next === 10) completeGame(tState.score, true);
+        }
+      });
+    });
+  }
+
+  // 🧩 Sudoku (mini 4×4) — fill every empty cell so each row, column and 2×2 box has 1-4 once.
+  function initSudoku(area) {
+    function generatePuzzle() {
+      const base = [[1, 2, 3, 4], [3, 4, 1, 2], [2, 1, 4, 3], [4, 3, 2, 1]];
+      const grid = base.map(row => row.slice());
+      const cells = [];
+      for (let r = 0; r < 4; r++) for (let c = 0; c < 4; c++) cells.push([r, c]);
+      const blanks = cells.sort(() => Math.random() - 0.5).slice(0, 7);
+      const puzzle = grid.map(row => row.slice());
+      blanks.forEach(([r, c]) => puzzle[r][c] = 0);
+      return { solution: grid, puzzle };
+    }
+    const { solution, puzzle } = generatePuzzle();
+    area.innerHTML = `
+      <div style="text-align:center; padding:14px 0;">
+        <p style="color:var(--text-dim); margin-bottom:12px; font-size:0.8rem;">Fill 1-4 so each row & column has no repeats.</p>
+        <div id="sdGrid" style="display:grid; grid-template-columns:repeat(4,56px); gap:4px; justify-content:center;"></div>
+        <button class="btn-claim" id="sdCheck" style="margin-top:16px;">Check Solution</button>
+      </div>`;
+    const grid = el('sdGrid');
+    puzzle.forEach((row, r) => row.forEach((val, c) => {
+      const cell = document.createElement(val === 0 ? 'select' : 'div');
+      cell.style.cssText = 'width:56px; height:56px; border-radius:8px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text); font-size:1.1rem; font-weight:700; display:flex; align-items:center; justify-content:center; text-align:center;';
+      if (val === 0) {
+        cell.innerHTML = `<option value="0"></option>` + [1, 2, 3, 4].map(n => `<option value="${n}">${n}</option>`).join('');
+        cell.dataset.r = r; cell.dataset.c = c;
+        cell.style.appearance = 'none'; cell.style.webkitAppearance = 'none'; cell.style.background = 'var(--surface-alt)';
+        cell.classList.add('sd-cell');
+      } else {
+        cell.textContent = val;
+        cell.style.color = 'var(--primary)';
+      }
+      grid.appendChild(cell);
+    }));
+    el('sdCheck').addEventListener('click', () => {
+      let ok = true;
+      area.querySelectorAll('.sd-cell').forEach(sel => {
+        const r = parseInt(sel.dataset.r, 10), c = parseInt(sel.dataset.c, 10);
+        if (parseInt(sel.value, 10) !== solution[r][c]) ok = false;
+      });
+      if (ok) { addTourneyScore(10); completeGame(tState.score, true); }
+      else { el('sdCheck').textContent = 'Not quite — try again'; setTimeout(() => el('sdCheck').textContent = 'Check Solution', 1200); }
+    });
   }
 
   function initMathSprint(area) {
@@ -893,7 +1095,9 @@
         <div id="msQuestion" style="font-size:2rem; font-weight:700; margin-bottom:20px;"></div>
         <input id="msInput" type="number" inputmode="numeric" style="width:140px; text-align:center; font-size:1.3rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);" placeholder="Answer">
         <br><button class="btn-claim" style="margin-top:14px;" id="msSubmit">Submit</button>
+        <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Answer 15 correctly to win the room!</p>
       </div>`;
+    let correct = 0;
     function newQ() {
       const a = Math.floor(Math.random() * 50) + 1, b = Math.floor(Math.random() * 50) + 1;
       const ops = ['+', '-', '×'];
@@ -906,7 +1110,11 @@
     newQ();
     el('msSubmit').addEventListener('click', () => {
       const val = parseInt(el('msInput').value, 10);
-      if (val === parseInt(area.dataset.answer, 10)) addTourneyScore(10);
+      if (val === parseInt(area.dataset.answer, 10)) {
+        addTourneyScore(10);
+        correct++;
+        if (correct >= 15) { completeGame(tState.score, true); return; }
+      }
       newQ();
       el('msInput').focus();
     });
@@ -921,11 +1129,13 @@
     return result === word ? scrambleWord(word) : result;
   }
   function initWordScramble(area) {
+    let solved = 0;
     area.innerHTML = `
       <div style="text-align:center; padding:20px 0;">
         <div id="wsScrambled" style="font-size:1.8rem; font-weight:700; letter-spacing:4px; margin-bottom:20px;"></div>
         <input id="wsInput" type="text" style="width:180px; text-align:center; text-transform:uppercase; font-size:1.2rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);" placeholder="Your guess">
         <br><button class="btn-claim" style="margin-top:14px;" id="wsSubmit">Submit</button>
+        <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Solve 10 words to win the room!</p>
       </div>`;
     function newWord() {
       const word = WORD_LIST[Math.floor(Math.random() * WORD_LIST.length)];
@@ -936,7 +1146,11 @@
     newWord();
     el('wsSubmit').addEventListener('click', () => {
       const val = el('wsInput').value.trim().toUpperCase();
-      if (val === area.dataset.answer) addTourneyScore(15);
+      if (val === area.dataset.answer) {
+        addTourneyScore(15);
+        solved++;
+        if (solved >= 10) { completeGame(tState.score, true); return; }
+      }
       newWord();
       el('wsInput').focus();
     });
@@ -952,6 +1166,7 @@
         <div id="memGrid" style="display:grid; grid-template-columns:repeat(2,80px); gap:10px; justify-content:center;">
           ${colors.map((c, i) => `<button data-i="${i}" style="width:80px;height:80px;border-radius:12px;background:${c};opacity:0.5;border:none;"></button>`).join('')}
         </div>
+        <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Reach level 10 to win the room!</p>
       </div>`;
     function flash(i, cb) {
       const btn = area.querySelector(`[data-i="${i}"]`);
@@ -980,7 +1195,11 @@
         const i = parseInt(btn.dataset.i, 10);
         if (sequence[userStep] === i) {
           userStep++;
-          if (userStep === sequence.length) { addTourneyScore(level * 5); nextLevel(); }
+          if (userStep === sequence.length) {
+            addTourneyScore(level * 5);
+            if (level >= 10) { completeGame(tState.score, true); return; }
+            nextLevel();
+          }
         } else {
           sequence = [Math.floor(Math.random() * 4)]; level = 1; userStep = 0;
           el('memLevel').textContent = 'Missed! Restarting at level 1';
@@ -990,11 +1209,12 @@
     });
     setTimeout(playSequence, 500);
   }
+
   function initReactionTime(area) {
-    let waitTimeout, startTime, waiting = false;
+    let waitTimeout, startTime, waiting = false, rounds = 0;
     area.innerHTML = `
       <div id="reactBox" style="height:220px; border-radius:16px; background:var(--surface-alt); display:flex; align-items:center; justify-content:center; font-weight:700; font-size:1.1rem; cursor:pointer; text-align:center; padding:0 20px;">Tap here to start</div>
-      <p style="text-align:center; color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Wait for green, then tap as fast as you can.</p>`;
+      <p style="text-align:center; color:var(--text-dim); font-size:0.8rem; margin-top:10px;">Wait for green, then tap fast. Complete 8 rounds to win the room.</p>`;
     const box = el('reactBox');
     function armRound() {
       box.style.background = 'var(--surface-alt)';
@@ -1018,6 +1238,8 @@
       const ms = Date.now() - startTime;
       const points = Math.max(1, Math.round(30 - ms / 40));
       addTourneyScore(points);
+      rounds++;
+      if (rounds >= 8) { completeGame(tState.score, true); return; }
       box.textContent = `${ms}ms · +${points} pts — tap to go again`;
       box.style.background = 'var(--surface-alt)';
       waiting = false;
@@ -1035,6 +1257,7 @@
     { q: 'Number of continents?', options: ['5', '6', '7', '8'], a: 2 },
   ];
   function initQuizMarathon(area) {
+    let correct = 0;
     function newQ() {
       const item = QUIZ_BANK[Math.floor(Math.random() * QUIZ_BANK.length)];
       area.dataset.answer = item.a;
@@ -1044,10 +1267,15 @@
           <div style="display:flex; flex-direction:column; gap:10px; max-width:280px; margin:0 auto;">
             ${item.options.map((o, i) => `<button class="btn-ghost quiz-opt" data-i="${i}">${o}</button>`).join('')}
           </div>
+          <p style="color:var(--text-dim); font-size:0.78rem; margin-top:14px;">Answer 10 correctly to win the room!</p>
         </div>`;
       area.querySelectorAll('.quiz-opt').forEach(btn => {
         btn.addEventListener('click', () => {
-          if (parseInt(btn.dataset.i, 10) === parseInt(area.dataset.answer, 10)) addTourneyScore(10);
+          if (parseInt(btn.dataset.i, 10) === parseInt(area.dataset.answer, 10)) {
+            addTourneyScore(10);
+            correct++;
+            if (correct >= 10) { completeGame(tState.score, true); return; }
+          }
           newQ();
         });
       });
@@ -1057,6 +1285,7 @@
 
   function initPatternMatch(area) {
     const shapes = ['🔴', '🔵', '🟢', '🟡', '🟣', '🟠'];
+    let rounds = 0;
     function newRound() {
       const target = shapes[Math.floor(Math.random() * shapes.length)];
       const options = new Set([target]);
@@ -1069,10 +1298,15 @@
           <div style="display:flex; gap:12px; justify-content:center;">
             ${optArr.map(s => `<button class="btn-ghost pm-opt" style="font-size:1.6rem;" data-s="${s}">${s}</button>`).join('')}
           </div>
+          <p style="color:var(--text-dim); font-size:0.78rem; margin-top:16px;">Match 12 to win the room!</p>
         </div>`;
       area.querySelectorAll('.pm-opt').forEach(btn => {
         btn.addEventListener('click', () => {
-          if (btn.dataset.s === target) addTourneyScore(8);
+          if (btn.dataset.s === target) {
+            addTourneyScore(8);
+            rounds++;
+            if (rounds >= 12) { completeGame(tState.score, true); return; }
+          }
           newRound();
         });
       });
@@ -1081,12 +1315,13 @@
   }
 
   function initNumberGuess(area) {
+    let rounds = 0;
     function newRound() {
       const secret = Math.floor(Math.random() * 100) + 1;
       area.dataset.secret = secret;
       area.innerHTML = `
         <div style="text-align:center; padding:20px 0;">
-          <p style="color:var(--text-dim); margin-bottom:14px;">Guess a number between 1–100. Closer guesses score more.</p>
+          <p style="color:var(--text-dim); margin-bottom:14px;">Guess a number between 1–100. Closer guesses score more. 8 rounds to win.</p>
           <input id="ngInput" type="number" min="1" max="100" style="width:120px; text-align:center; font-size:1.3rem; padding:10px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text);">
           <br><button class="btn-claim" style="margin-top:14px;" id="ngSubmit">Guess</button>
           <p id="ngResult" style="margin-top:10px; color:var(--text-dim);"></p>
@@ -1097,29 +1332,15 @@
         const diff = Math.abs(guess - secret);
         const points = Math.max(0, 20 - diff);
         addTourneyScore(points);
+        rounds++;
         el('ngResult').textContent = `Secret was ${secret} · +${points} pts`;
+        if (rounds >= 8) { setTimeout(() => completeGame(tState.score, true), 700); return; }
         setTimeout(newRound, 900);
       });
     }
     newRound();
   }
 
-  function initAimTap(area) {
-    area.innerHTML = `<div id="aimArena" style="position:relative; height:260px; border-radius:16px; background:var(--surface-alt); overflow:hidden;"></div>`;
-    const arena = el('aimArena');
-    let target;
-    function spawnTarget() {
-      if (target) target.remove();
-      target = document.createElement('button');
-      target.style.cssText = 'position:absolute; width:44px; height:44px; border-radius:50%; background:var(--primary); border:none;';
-      const maxX = Math.max(10, arena.clientWidth - 44), maxY = Math.max(10, arena.clientHeight - 44);
-      target.style.left = Math.floor(Math.random() * maxX) + 'px';
-      target.style.top = Math.floor(Math.random() * maxY) + 'px';
-      target.addEventListener('click', () => { addTourneyScore(5); spawnTarget(); });
-      arena.appendChild(target);
-    }
-    spawnTarget();
-  }
 
   window.goToPremium = function () {
     document.querySelector('.tab-btn[data-page="more"]').click();

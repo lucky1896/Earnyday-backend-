@@ -790,7 +790,27 @@
           <button class="btn-premium" id="upgradeBtn">Upgrade to Premium</button>
         </div>
       </div>
-      <div class="note">Payment is processed by Razorpay. In test mode, use Razorpay's test card numbers — no real money moves until you switch to live keys.</div>
+      <div id="premiumStatusNote" class="note" style="display:none;"></div>
+      <div class="note">Pay via UPI and submit your transaction reference — activated within 24 hours after verification.</div>
+
+      <div id="premiumPayModalBg" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:60; align-items:flex-end; justify-content:center;">
+        <div style="background:var(--surface); width:100%; max-width:420px; border-radius:20px 20px 0 0; padding:22px; max-height:85vh; overflow-y:auto;">
+          <h2 style="font-size:1.05rem; margin-bottom:4px;">Pay for Premium</h2>
+          <p style="color:var(--text-dim); font-size:0.82rem; margin-bottom:16px;">Send <b id="payAmountText">₹99</b> to the UPI ID below, then submit your transaction reference (UTR) — we'll activate Premium within 24 hours.</p>
+          <div style="background:var(--surface-alt); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center;">
+            <span class="mono" id="adminUpiText" style="font-size:0.9rem;">—</span>
+            <button class="btn-ghost" id="copyUpiBtn" style="padding:6px 12px; font-size:0.75rem;">Copy</button>
+          </div>
+          <a id="upiPayLink" href="#" style="display:block; text-align:center; padding:13px; border-radius:10px; background:var(--accent); color:#12101f; font-weight:700; text-decoration:none; margin-bottom:18px;">Pay via UPI App</a>
+          <label style="font-size:0.82rem; font-weight:600; display:block; margin-bottom:6px;">Transaction Reference (UTR) / UPI Ref No.</label>
+          <input type="text" id="utrInput" placeholder="e.g. 401234567890" style="width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--line); background:var(--surface-alt); color:var(--text); font-family:'JetBrains Mono',monospace; font-size:0.85rem; margin-bottom:6px;">
+          <div style="font-size:0.72rem; color:var(--text-dim); margin-bottom:16px;">Found in your UPI app's payment success screen or bank SMS.</div>
+          <div style="display:flex; gap:10px;">
+            <button class="btn-ghost" id="closePremiumPayBtn" style="flex:1;">Cancel</button>
+            <button class="btn-premium" id="submitUtrBtn" style="flex:1;">Submit</button>
+          </div>
+        </div>
+      </div>
 
       <div class="page-head" style="margin-top:28px;"><h1 style="font-size:1.1rem;">Account</h1></div>
       <div class="status-card" style="margin-bottom:14px;">
@@ -2787,7 +2807,12 @@
     el('settingsName').textContent = me.name;
     el('settingsEmail').textContent = me.email;
     el('settingsPlan').textContent = isPremium ? 'Premium' : 'Free';
-    if (me.premiumPriceInr) el('premiumPriceText').textContent = '₹' + me.premiumPriceInr + ' / month';
+    if (isPremium && me.premium_expires_at) {
+      el('settingsPlan').textContent = 'Premium · until ' + new Date(me.premium_expires_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+    }
+    if (me.premiumPriceInr) { el('premiumPriceText').textContent = '₹' + me.premiumPriceInr + ' / month'; currentPremiumPrice = me.premiumPriceInr; }
+    if (me.adminUpiId) currentAdminUpi = me.adminUpiId;
+    if (!isPremium) loadPremiumStatus();
     const upiInput = el('upiIdInput');
     if (upiInput && me.upi_id && !upiInput.value) upiInput.value = me.upi_id;
   }
@@ -2916,33 +2941,46 @@
     el('premiumCard').classList.toggle('highlight', !isPremium);
   }
 
-  el('upgradeBtn').addEventListener('click', async () => {
+  let currentPremiumPrice = 99, currentAdminUpi = '';
+  el('upgradeBtn').addEventListener('click', () => {
     if (isPremium) return;
+    if (!currentAdminUpi) { showToast('UPI payment is not set up yet — check back soon.'); return; }
+    el('payAmountText').textContent = '₹' + currentPremiumPrice;
+    el('adminUpiText').textContent = currentAdminUpi;
+    el('upiPayLink').href = `upi://pay?pa=${encodeURIComponent(currentAdminUpi)}&pn=EarnyDay&am=${currentPremiumPrice}&cu=INR&tn=Premium%20subscription`;
+    el('utrInput').value = '';
+    el('premiumPayModalBg').style.display = 'flex';
+  });
+  el('closePremiumPayBtn').addEventListener('click', () => { el('premiumPayModalBg').style.display = 'none'; });
+  el('copyUpiBtn').addEventListener('click', () => {
+    if (navigator.clipboard) navigator.clipboard.writeText(currentAdminUpi);
+    showToast('UPI ID copied');
+  });
+  el('submitUtrBtn').addEventListener('click', async () => {
+    const utrNumber = el('utrInput').value.trim();
+    if (utrNumber.length < 4) { showToast('Enter a valid transaction reference number'); return; }
     try {
-      const { order, keyId } = await api('/payment/create-order', { method: 'POST' });
-      const rzp = new Razorpay({
-        key: keyId,
-         amount: order.amount,
-        currency: order.currency,
-        order_id: order.id,
-        name: 'Earny Day',
-        description: 'Premium subscription (2x rewards)',
-        handler: async function (response) {
-          try {
-            await api('/payment/verify', { method: 'POST', body: JSON.stringify(response) });
-            showToast('Premium unlocked — 2x rewards from now on!');
-            await refreshWalletStats();
-          } catch (err) {
-            showToast('Payment verification failed: ' + err.message);
-          }
-        },
-        theme: { color: '#0f6b5c' },
-      });
-      rzp.open();
+      await api('/premium/request', { method: 'POST', body: JSON.stringify({ utrNumber }) });
+      el('premiumPayModalBg').style.display = 'none';
+      showToast('Submitted! We\'ll activate Premium within 24 hours after verification.');
+      loadPremiumStatus();
     } catch (err) {
-      showToast('Could not start payment: ' + err.message);
+      showToast(err.message);
     }
   });
+  async function loadPremiumStatus() {
+    try {
+      const rows = await api('/premium/mine');
+      const note = el('premiumStatusNote');
+      const pending = rows.find(r => r.status === 'pending');
+      if (pending) {
+        note.style.display = 'block';
+        note.textContent = `Payment of ₹${pending.amount_inr} submitted (ref: ${pending.utr_number}) — pending verification.`;
+      } else {
+        note.style.display = 'none';
+      }
+    } catch (err) { /* silent */ }
+  }
 
   // ---------- toast ----------
   function showToast(msg) {

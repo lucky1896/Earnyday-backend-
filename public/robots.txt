@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://earnyday-backend.onrender.com/sitemap.xml
